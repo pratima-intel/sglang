@@ -478,11 +478,13 @@ def latency_test(
     custom_prompts = list()
     if bench_args.prompt_filename != "":
         if not os.path.exists(bench_args.prompt_filename):
-            rank_print(f"Customer prompt file {bench_args.prompt_filename} does not exist. Using dummy data...")
+            rank_print(
+                f"Custom prompt file {bench_args.prompt_filename} does not exist. Using dummy data..."
+            )
         else:
             with open(bench_args.prompt_filename, 'r') as pf:
                 prompt_pool = json.load(pf)
-                prompt_dict = prompt_pool['deepseekr1'][str(bench_args.input_len[0])]
+                prompt_dict = prompt_pool[str(bench_args.input_len[0])]
                 for index in range(bench_args.batch_size[0]):
                     custom_prompts.append(prompt_dict[str(index)])
 
