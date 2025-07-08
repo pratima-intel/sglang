@@ -489,7 +489,7 @@ def latency_test(
                     prompt_dict = prompt_pool[str(bench_args.input_len[0])]
                 else:
                     for key in prompt_pool.keys():
-                        if key in server_args.model_path:
+                        if key in server_args.model_path.lower():
                             prompt_dict = prompt_pool[key][str(bench_args.input_len[0])]
                             break
                 if prompt_dict is None:
