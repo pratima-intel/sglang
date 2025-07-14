@@ -228,11 +228,27 @@ std::tuple<at::Tensor, at::Tensor> rotary_embedding_cpu(
 
 // CPU and memory binding
 std::string init_cpu_threads_env(const std::string& cpu_ids);
-
+std::tuple<at::Tensor, at::Tensor>
+float8_linear_prepack_impl(
+    const at::Tensor& weight,
+    const at::Tensor& scales);
+at::Tensor float8_linear_impl(
+    const at::Tensor& input,
+    const at::Tensor& input_scales,
+    const at::Tensor& weight,
+    const at::Tensor& weight_scales,
+    const std::optional<at::Tensor>& bias,
+    at::ScalarType output_dtype);
 TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
   // activation
   m.def("silu_and_mul_cpu(Tensor input) -> Tensor");
   m.impl("silu_and_mul_cpu", torch::kCPU, &silu_and_mul_cpu);
+
+  m.def("float8_linear_prepack_cpu(Tensor weight, Tensor scales) -> (Tensor, Tensor)");
+  m.impl("float8_linear_prepack_cpu", torch::kCPU, &float8_linear_prepack_impl);
+
+  m.def("float8_linear_cpu(Tensor input, Tensor input_scales, Tensor weight, Tensor weight_scales, Tensor? bias, ScalarType output_dtype) -> Tensor");
+  m.impl("float8_linear_cpu", torch::kCPU, &float8_linear_impl);
 
   // norm
   m.def("rmsnorm_cpu(Tensor input, Tensor weight, float eps) -> Tensor");
