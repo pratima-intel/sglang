@@ -1,0 +1,54 @@
+FROM ubuntu:24.04
+SHELL ["/bin/bash", "-c"]
+
+ARG VER_SGLANG=mlperf_support_v2
+ARG VER_TRITON=3.3.1
+
+RUN apt-get update && \
+    apt-get full-upgrade -y && \
+    DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y \
+    ca-certificates \
+    git \
+    curl \
+    wget \
+    vim \
+    gcc \
+    g++ \
+    make
+
+WORKDIR /sgl-workspace
+
+RUN curl -fsSL -v -o miniforge.sh -O https://github.com/conda-forge/miniforge/releases/download/24.11.3-2/Miniforge3-24.11.3-2-Linux-x86_64.sh && \
+    bash miniforge.sh -b -p ./miniforge3 && \
+    rm -f miniforge.sh && \
+    . miniforge3/bin/activate && \
+    conda install -y libsqlite==3.48.0 gperftools tbb libnuma numactl
+
+ENV PATH=/sgl-workspace/miniforge3/bin:/sgl-workspace/miniforge3/condabin:${PATH}
+ENV PIP_ROOT_USER_ACTION=ignore
+ENV CONDA_PREFIX=/sgl-workspace/miniforge3
+
+RUN pip config set global.index-url https://download.pytorch.org/whl/cpu && \
+    pip config set global.extra-index-url https://pypi.org/simple && \
+    pip install intel-openmp
+
+RUN git clone https://github.com/jianan-gu/sglang.git && \
+    cd sglang && \
+    git checkout ${VER_SGLANG} && \
+    pip install -e "python[all_cpu]" && \
+    pip uninstall torch -y && \
+    pip install https://download.pytorch.org/whl/nightly/cpu/torch-2.9.0.dev20250701%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl && \
+    pip install https://download.pytorch.org/whl/nightly/cpu/torchvision-0.23.0.dev20250701%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl --force-reinstall  && \
+    pip install triton==${VER_TRITON} --force-reinstall && \
+    cd sgl-kernel && \
+    cp pyproject_cpu.toml pyproject.toml && \
+    pip install uv && \
+    pip install scikit-build-core && \
+    uv build --wheel -Cbuild-dir=build . --color=always --no-build-isolation && \
+    pip install dist/sgl_kernel-0.2.6.post1-cp312-cp312-linux_x86_64.whl --force-reinstall && \
+
+ENV SGLANG_USE_CPU_ENGINE=1
+ENV SGLANG_USE_CPU_INT4_W4A8=1
+ENV LD_PRELOAD=/sgl-workspace/miniforge3/lib/libiomp5.so:/sgl-workspace/miniforge3/lib/libtcmalloc.so:/sgl-workspace/miniforge3/lib/libtbbmalloc.so.2
+
+WORKDIR /sgl-workspace/sglang
