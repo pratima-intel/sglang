@@ -21,7 +21,8 @@ from typing import Any, Callable, List, Optional, Tuple, Type, Union
 import numpy as np
 import pybase64
 import requests
-from IPython.display import HTML, display
+
+# from IPython.display import HTML, display
 from pydantic import BaseModel
 from tqdm import tqdm
 
