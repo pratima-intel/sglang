@@ -706,6 +706,17 @@ class AWQMoEMethod(FusedMoEMethodBase):
         layer.workspace = marlin_make_workspace(device, 4)
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
+        if _is_cpu:
+            assert (
+                _is_cpu_amx_available
+            ), "AWQLinearMethod on CPU requires that CPU has AMX support"
+            _amx_process_int4_packed_qweight_after_loading(
+                layer, ["w13_qweight", "w13_qzeros", "w13_scales"], "awq"
+            )
+            _amx_process_int4_packed_qweight_after_loading(
+                layer, ["w2_qweight", "w2_qzeros", "w2_scales"], "awq"
+            )
+            return
         num_experts = layer.w13_qweight.shape[0]
         device = layer.w13_qweight.device
 
