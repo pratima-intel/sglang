@@ -88,12 +88,16 @@ def _amx_process_int4_packed_qweight_after_loading(
         scales_tensor = getattr(module, weight_names[2])
         prefix_list = weight_names[0].split("_")
         has_prefix = len(prefix_list) != 1
-        if SGLANG_USE_CPU_INT4_W4A8:
+        if SGLANG_USE_CPU_INT4_W4A8 and not has_prefix:
             qweight, qzeros, scales, compensation = _autoawq_to_int4pack(
                 qweight_tensor.data, qzeros_tensor.data, scales_tensor.data
             )
             compensation = torch.nn.Parameter(compensation, requires_grad=False)
-            setattr(module, "compensation" if not has_prefix else prefix_list[0]+"_compensation", compensation)
+            setattr(
+                module,
+                "compensation" if not has_prefix else prefix_list[0] + "_compensation",
+                compensation,
+            )
         else:
             qweight, qzeros, scales = _autoawq_to_int4pack(
                 qweight_tensor.data, qzeros_tensor.data, scales_tensor.data

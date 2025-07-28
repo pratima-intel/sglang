@@ -793,6 +793,26 @@ class AWQMoEMethod(FusedMoEMethodBase):
 
         assert activation == "silu", "Only SiLU activation is supported."
 
+        if use_intel_amx_backend(layer):
+            return torch.ops.sgl_kernel.fused_experts_cpu(
+                x,
+                layer.w13_qweight,
+                layer.w2_qweight,
+                topk_weights,
+                topk_ids,
+                False,  # inplace See [Note] inplace should be False in fused_experts.
+                False,  # use_int8_w8a8
+                False,  # use_fp8_w8a16
+                True,  # use_int4_w4a16
+                layer.w13_scales,  # w1_scale
+                layer.w2_scales,  # w2_scale
+                layer.w13_qzeros,
+                layer.w2_qzeros,
+                None,  # block_size
+                None,  # a1_scale
+                None,  # a2_scale
+                True,  # is_vnni
+            )
         # The input must currently be float16
         orig_dtype = x.dtype
         x = x.half()
