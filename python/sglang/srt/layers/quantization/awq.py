@@ -147,12 +147,13 @@ class AWQConfig(QuantizationConfig):
         self, layer: torch.nn.Module, prefix: str
     ) -> Optional[LinearMethodBase]:
         from sglang.srt.layers.linear import LinearBase
-
+        from sglang.srt.layers.moe.fused_moe_triton import FusedMoE
         if isinstance(layer, LinearBase):
             if is_layer_skipped_awq(prefix, self.modules_to_not_convert):
                 return UnquantizedLinearMethod()
             return AWQLinearMethod(self)
-
+        elif isinstance(layer, FusedMoE):
+            return AWQMoEMethod(self)
         return None
 
 
@@ -703,7 +704,8 @@ class AWQMoEMethod(FusedMoEMethodBase):
         set_weight_attrs(w2_qzeros, extra_weight_attrs)
 
         device = layer.w13_qweight.device
-        layer.workspace = marlin_make_workspace(device, 4)
+        if device.type != "cpu":
+            layer.workspace = marlin_make_workspace(device, 4)
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
         if _is_cpu:
@@ -794,6 +796,7 @@ class AWQMoEMethod(FusedMoEMethodBase):
         assert activation == "silu", "Only SiLU activation is supported."
 
         if use_intel_amx_backend(layer):
+            topk_weights, topk_ids, _ = topk_output
             return torch.ops.sgl_kernel.fused_experts_cpu(
                 x,
                 layer.w13_qweight,
@@ -813,6 +816,7 @@ class AWQMoEMethod(FusedMoEMethodBase):
                 None,  # a2_scale
                 True,  # is_vnni
             )
+
         # The input must currently be float16
         orig_dtype = x.dtype
         x = x.half()

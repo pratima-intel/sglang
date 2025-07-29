@@ -87,8 +87,10 @@ def _amx_process_int4_packed_qweight_after_loading(
         qzeros_tensor = getattr(module, weight_names[1])
         scales_tensor = getattr(module, weight_names[2])
         prefix_list = weight_names[0].split("_")
+        # MoE layers have prefix
         has_prefix = len(prefix_list) != 1
         if SGLANG_USE_CPU_INT4_W4A8 and not has_prefix:
+            # TODO: support MoE layers for W4A8 path
             qweight, qzeros, scales, compensation = _autoawq_to_int4pack(
                 qweight_tensor.data, qzeros_tensor.data, scales_tensor.data
             )
