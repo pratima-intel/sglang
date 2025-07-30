@@ -159,7 +159,7 @@ def _amx_process_int4_packed_qweight_after_loading(
                 compensation,
             )
         else:
-            if has_prefix:
+            if has_prefix and quant_method == "gptq":
                 qweight_list = []
                 qzeros_list = []
                 scales_list = []
