@@ -42,7 +42,7 @@ from sglang.srt.layers.quantization.utils import (
     replace_parameter,
     unpack_cols,
 )
-
+from sglang.srt.utils import cpu_has_amx_support, is_cpu, is_cuda, use_intel_amx_backend
 if TYPE_CHECKING:
     from sglang.srt.layers.moe.topk import TopKOutput
 
@@ -54,10 +54,15 @@ except ImportError:
 from sglang.srt.utils import is_cuda
 
 _is_cuda = is_cuda()
-
+_is_cpu_amx_available = cpu_has_amx_support()
+_is_cpu = is_cpu()
 if _is_cuda:
     from sgl_kernel import fused_marlin_moe
-
+elif _is_cpu and _is_cpu_amx_available:
+    from sglang.srt.layers.amx_utils import (
+        SGLANG_USE_CPU_INT4_W4A8,
+        _amx_process_int4_packed_qweight_after_loading,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +180,7 @@ class GPTQConfig(QuantizationConfig):
 
     @classmethod
     def get_supported_act_dtypes(cls) -> List[torch.dtype]:
-        return [torch.half]
+        return [torch.half,torch.bfloat16]
 
     @classmethod
     # Need to figure it out
@@ -515,22 +520,30 @@ class GPTQLinearMethod(LinearMethodBase):
         layer.register_parameter("scales", scales)
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
-        # for torch.compile
-        layer.qzeros = torch.nn.Parameter(layer.qzeros.data, requires_grad=False)
-        layer.qweight = torch.nn.Parameter(layer.qweight.data, requires_grad=False)
-        layer.g_idx = torch.nn.Parameter(layer.g_idx.data, requires_grad=False)
-        layer.scales = torch.nn.Parameter(layer.scales.data, requires_grad=False)
+        if _is_cpu:
+            assert (
+                _is_cpu_amx_available
+            ), "AWQLinearMethod on CPU requires that CPU has AMX support"
+            _amx_process_int4_packed_qweight_after_loading(
+                layer, ["qweight", "qzeros", "scales"], "gptq"
+            )
+        else:
+            # for torch.compile
+            layer.qzeros = torch.nn.Parameter(layer.qzeros.data, requires_grad=False)
+            layer.qweight = torch.nn.Parameter(layer.qweight.data, requires_grad=False)
+            layer.g_idx = torch.nn.Parameter(layer.g_idx.data, requires_grad=False)
+            layer.scales = torch.nn.Parameter(layer.scales.data, requires_grad=False)
 
-        # exllama needs to shuffle the weight after the weight is loaded
-        # here we do the shuffle on first forward pass
-        if self.use_shuffle:
-            if self.quant_config.desc_act:
-                layer.g_idx.data = torch.argsort(layer.g_idx).to(torch.int)
-            else:
-                layer.g_idx.data = torch.empty(
-                    (0,), dtype=torch.int, device=layer.g_idx.device
-                )
-            ops.gptq_shuffle(layer.qweight, layer.g_idx, self.quant_config.weight_bits)
+            # exllama needs to shuffle the weight after the weight is loaded
+            # here we do the shuffle on first forward pass
+            if self.use_shuffle:
+                if self.quant_config.desc_act:
+                    layer.g_idx.data = torch.argsort(layer.g_idx).to(torch.int)
+                else:
+                    layer.g_idx.data = torch.empty(
+                        (0,), dtype=torch.int, device=layer.g_idx.device
+                    )
+                ops.gptq_shuffle(layer.qweight, layer.g_idx, self.quant_config.weight_bits)
 
     def apply(
         self,
@@ -538,6 +551,21 @@ class GPTQLinearMethod(LinearMethodBase):
         x: torch.Tensor,
         bias: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+        if use_intel_amx_backend(layer):
+            if SGLANG_USE_CPU_INT4_W4A8:
+                return torch.ops.sgl_kernel.int4_scaled_mm_cpu_with_quant(
+                    x,
+                    layer.qweight,
+                    layer.scales,
+                    layer.qzeros,
+                    layer.compensation,
+                    bias,
+                    x.dtype,
+                )
+            else:
+                return torch.ops.sgl_kernel.int4_scaled_mm_cpu(
+                    x, layer.qweight, layer.qzeros, layer.scales, bias
+                )
         out_shape = x.shape[:-1] + (layer.qweight.shape[-1],)
         reshaped_x = x.reshape(-1, x.shape[-1])
 
