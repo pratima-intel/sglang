@@ -19,6 +19,7 @@ import torch
 import torch.nn.functional as F
 
 from sglang.srt.managers.expert_distribution import ExpertDistributionRecorder
+
 # from sglang.srt.managers.schedule_batch import global_server_args_dict
 from sglang.srt.utils import get_compiler_backend, is_cuda, is_hip
 
@@ -63,7 +64,9 @@ def fused_topk(
 ):
     if hidden_states.device == torch.device("cpu"):
         if cpu_has_amx_support():
-            topk_weights, topk_ids = sgl_kernel.common_ops.topk_softmax_cpu(hidden_states, gating_output, topk, renormalize)
+            topk_weights, topk_ids = sgl_kernel.common_ops.topk_softmax_cpu(
+                hidden_states, gating_output, topk, renormalize
+            )
             return topk_weights, topk_ids
         else:
             return fused_topk_native(hidden_states, gating_output, topk, renormalize)
@@ -317,7 +320,7 @@ def select_experts(
                     n_share_experts_fusion=n_share_experts_fusion,
                 )
     elif torch_native and custom_routing_function is None:
-        topk_weights, topk_ids = fused_topk_native(
+        topk_weights, topk_ids = fused_topk(
             hidden_states=hidden_states,
             gating_output=router_logits,
             topk=top_k,
