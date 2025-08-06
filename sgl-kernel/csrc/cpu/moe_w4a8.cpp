@@ -327,6 +327,8 @@ void fused_experts_int4_w4a8_kernel_impl(
       // B shape [IC, n_size] in vnni format
       int32_t expert_id = expert_ids[mb];
       const uint8_t* __restrict__ B = packed_w2 + (expert_id * stride_e2 + nb * BLOCK_N * stride_oc) / 2;
+      const int32_t* __restrict__ B_compensation_w2 = compensation_w2 + expert_id * stride_e2 + nb * BLOCK_N * stride_oc;
+
       // Bz and Bs: [E, IC/gs, OC]
       const int8_t* __restrict__ Bz = w2z + expert_id * (IC / group_size) * OC + nb * BLOCK_N;
       const float* __restrict__ Bs = w2s + expert_id * (IC / group_size) * OC + nb * BLOCK_N;
@@ -345,7 +347,7 @@ void fused_experts_int4_w4a8_kernel_impl(
           B,
           Bs,
           Bz,
-          compensation_w2,
+          B_compensation_w2,
           m_size,
           n_size,
           IC,
