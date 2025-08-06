@@ -421,6 +421,76 @@ inline void store_out(const float* y_buf, out_dtype* c_ptr, int64_t m, /* int64_
   }
 }
 
+template <bool sym_quant_a>
+void _dequant_gemm_accum2(
+    float* C,
+    const uint8_t* A,
+    const float* scales_a,
+    const int32_t* qzeros_a,
+    const uint8_t* B,
+    const float* scales_b,
+    const int8_t* qzeros_b,
+    const int32_t* compensation,
+    int64_t M,
+    int64_t N,
+    int64_t K,
+    int64_t lda,
+    int64_t ldb,
+    int64_t ldc,
+    bool cpublas_can_pack) {
+  // Compute GEMM int8 * int8 -> int32
+  // dequant result to float by applying scales/qzeros
+#if defined(CPU_CAPABILITY_AVX512)
+  if (M <= 4 && cpublas_can_pack) {
+    switch (M) {
+      case 1:
+        call_dequant_gemm_accum_small_M(1);
+        return;
+      case 2:
+        call_dequant_gemm_accum_small_M(2);
+        return;
+      case 3:
+        call_dequant_gemm_accum_small_M(3);
+        return;
+      case 4:
+        call_dequant_gemm_accum_small_M(4);
+        return;
+    }
+  }
+#endif
+
+  int8_t dqB[K * N];
+  _dequant_weight_zp_only<N, ldb>(B, dqB, qzeros_b, K);
+  using Tin = typename ActDtype<sym_quant_a>::type;
+  Tin* A_ptr = (Tin*)A;
+#if defined(CPU_CAPABILITY_AVX512)
+  if (cpublas_can_pack) {
+    int32_t C_i32[M * N];
+    at::native::cpublas::brgemm(
+        M, N, K, lda, N /*ldb*/, N /*ldc*/, false /* add_C */, A_ptr, dqB, C_i32, true /* is_vnni */);
+    _mm_prefetch(B + N * K / 2, _MM_HINT_T0);
+    _mm_prefetch(A + K, _MM_HINT_T0);
+    _dequant_and_store<true, N, sym_quant_a>(
+        C, C_i32, scales_a, qzeros_a, scales_b, compensation, M, N /*ldi*/, ldc, 1 /*ldsa*/);
+  } else
+#endif
+  {
+    for (int64_t i = 0; i < M; ++i) {
+      for (int64_t j = 0; j < N; ++j) {
+        float sum = 0;
+        for (int64_t k = 0; k < K; ++k) {
+          if constexpr (sym_quant_a) {
+            sum += ((int32_t)A_ptr[i * lda + k] * dqB[k * N + j]);
+          } else {
+            sum += ((int32_t)A_ptr[i * lda + k] - qzeros_a[i]) * (int32_t)dqB[k * N + j];
+          }
+        }
+        C[i * ldc + j] += sum * scales_a[i] * scales_b[j];
+      }
+    }
+  }
+}
+
 template <typename out_dtype, bool cpublas_can_pack, bool sym_quant_a>
 void _da8w4_linear_impl(
     const at::Tensor& input,
@@ -666,4 +736,30 @@ at::Tensor int4_scaled_mm_cpu_with_quant(
     call__da8w4_linear_with_quant_impl(false, false);
   }
   return output;
+}
+
+template <typename scalar_t, bool sym_quant_a>
+void inner_dequant_gemm(
+    scalar_t* C,
+    float* C_temp,
+    const uint8_t* A,
+    const float* scales_a,
+    const int32_t* qzeros_a,
+    const uint8_t* B,
+    const float* scales_b,
+    const int8_t* qzeros_b,
+    const int32_t* compensation,
+    int64_t M,
+    int64_t N,
+    int64_t K,
+    int64_t lda,
+    int64_t ldb,
+    int64_t ldc,
+    bool cpublas_can_pack) {
+  _dequant_gemm_accum2<sym_quant_a>(
+      C_temp, A, scales_a, qzeros_a, B, scales_b, qzeros_b, compensation, M, N, K, lda, ldb, ldc, cpublas_can_pack);
+  // copy from Ctmp to C
+  for (int64_t m = 0; m < M; ++m) {
+    copy_stub(C + m * ldc, C_temp + m * BLOCK_N, N);
+  }
 }

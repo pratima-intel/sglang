@@ -983,6 +983,7 @@ at::Tensor fused_experts_cpu(
     bool use_int8_w8a8,
     bool use_fp8_w8a16,
     bool use_int4_w4a16,
+    bool use_int4_w4a8,
     const std::optional<at::Tensor>& w1_scale,
     const std::optional<at::Tensor>& w2_scale,
     const std::optional<at::Tensor>& w1_zero,
@@ -990,6 +991,8 @@ at::Tensor fused_experts_cpu(
     const std::optional<std::vector<int64_t>> block_size,
     const std::optional<at::Tensor>& a1_scale,
     const std::optional<at::Tensor>& a2_scale,
+    const std::optional<at::Tensor>& compensation_w1,
+    const std::optional<at::Tensor>& compensation_w2,
     bool is_vnni) {
   RECORD_FUNCTION(
       "sgl-kernel::fused_experts_cpu", std::vector<c10::IValue>({hidden_states, w1, w2, topk_weights, topk_ids}));
@@ -1202,6 +1205,48 @@ at::Tensor fused_experts_cpu(
           w2_zero.value().data_ptr<uint8_t>(),
           w1_scale.value().data_ptr<scalar_t>(),
           w2_scale.value().data_ptr<scalar_t>(),
+          group_size,
+          topk_weights.data_ptr<float>(),
+          sorted_ids,
+          expert_ids,
+          offsets,
+          M,
+          N,
+          K,
+          E,
+          topk,
+          num_tokens_post_pad);
+    } else if (use_int4_w4a8) {
+      // scalar_t* __restrict__ A_tmp = intermediate_cache2 + M * topk * K;
+      // float* __restrict__ C_tmp = (float*)((void*)(A_tmp + num_threads * BLOCK_M * K));  // Ctmp is ignored?
+      uint8_t* __restrict__ A_tmp = (uint8_t*)((void*)(intermediate_cache2 + M * topk * K));
+      float* __restrict__ C_tmp = (float*)((void*)(A_tmp + num_threads * BLOCK_M * K));
+      scalar_t* __restrict__ intermediate_cache0 = (scalar_t*)((void*)(C_tmp + num_threads * 2 * BLOCK_M * BLOCK_N));
+      const int group_size = K / w1_zero.value().size(1);
+
+      uint8_t* __restrict__ Aq_tmp = (uint8_t*)((void*)(C_tmp + num_threads * 2 * BLOCK_M * BLOCK_N));
+      float* __restrict__ As_tmp = (float*)((void*)(Aq_tmp + std::max(M * K, M * topk * N)));
+
+      // TODO: check scales and zeros
+      fused_experts_int4_w4a8_kernel_impl<scalar_t>(
+          out_hidden_states.data_ptr<scalar_t>(),
+          intermediate_cache0,
+          intermediate_cache1,
+          intermediate_cache2,
+          A_tmp,
+          Aq_tmp,
+          As_tmp,
+          nullptr,
+          C_tmp,
+          hidden_states.data_ptr<scalar_t>(),
+          packed_w1.data_ptr<uint8_t>(),
+          packed_w2.data_ptr<uint8_t>(),
+          w1_zero.value().data_ptr<int8_t>(),
+          w2_zero.value().data_ptr<int8_t>(),
+          w1_scale.value().data_ptr<float>(),
+          w2_scale.value().data_ptr<float>(),
+          compensation_w1.value().data_ptr<int32_t>(),
+          compensation_w2.value().data_ptr<int32_t>(),
           group_size,
           topk_weights.data_ptr<float>(),
           sorted_ids,
