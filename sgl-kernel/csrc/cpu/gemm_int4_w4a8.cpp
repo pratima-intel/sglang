@@ -3,7 +3,7 @@
 #include <torch/all.h>
 
 #include "vec.h"
-
+#include "gemm.h"
 namespace {
 
 #define BLOCK_N 32
