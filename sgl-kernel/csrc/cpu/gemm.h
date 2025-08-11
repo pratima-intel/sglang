@@ -13,7 +13,10 @@ constexpr int block_size_m() {
   return 2 * TILE_M;
 }
 constexpr int block_size_n() {
-  return 2 * TILE_N;
+  return 4 * TILE_N;
+}
+constexpr int block_size_2n() {
+  return 4 * TILE_N;
 }
 
 // define threshold using brgemm (intel AMX)

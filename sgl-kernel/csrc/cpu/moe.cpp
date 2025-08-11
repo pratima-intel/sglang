@@ -322,19 +322,115 @@ inline void silu_and_mul(
   }
 }
 
+// template <typename scalar_t, int BLOCK_N>
+// inline void clamp_sigmoid_and_mul_stub2(
+//     scalar_t* __restrict__ output,
+//     const float* __restrict__ input0,
+//     const float* __restrict__ input1,
+//     int64_t m_size,
+//     int64_t N,
+//     const float alpha,
+//     const float limit) {
+//   using bVec = at::vec::Vectorized<scalar_t>;
+//   using fVec = at::vec::Vectorized<float>;
+
+//   const fVec one = fVec(1.f);
+//   const fVec limit_v = fVec(limit);
+//   const fVec nlimit_v = fVec(-limit);
+//   const fVec alpha_v = fVec(alpha);
+
+//   // no remainder
+//   for (int64_t m = 0; m < m_size; ++m) {
+//     scalar_t* __restrict__ out = output + m * N;
+//     const float* __restrict__ x = input0 + m * BLOCK_N;
+//     const float* __restrict__ y = input1 + m * BLOCK_N;
+
+//     // TODO: 
+//     // remove this assert and make block_n common to meet below interleaved x and y
+//     static_assert(BLOCK_N == 64);
+
+//     for (int64_t d = 0; d < BLOCK_N; d += bVec::size()) {
+//       const float* __restrict__ cur_ptr = d < 32? x : y;
+
+//       float tmp_glu0[fVec::size()];  // 16
+//       float tmp_glu1[fVec::size()];  // 16
+//       float tmp_linear0[fVec::size()]; // 16
+//       float tmp_linear1[fVec::size()]; // 16
+
+//       // interleaved: x[2i] = glu, x[2i+1] = linear
+//       for (int j = 0; j < 16  ; ++j) {
+//         //x0 [0,2,..30]
+//         tmp_glu0[j] = cur_ptr[ j * 2];
+//         //x1 [32,34,..62]
+//         tmp_glu1[j] = cur_ptr[ 32 + j * 2];
+//         //y0 [1,3,...31]
+//         tmp_linear0[j] = cur_ptr[ j * 2 + 1];
+//         //y1 [33,35,..63]
+//         tmp_linear1[j] = cur_ptr[32  + j * 2 + 1];
+//       }
+//       fVec x0 = fVec::loadu(tmp_glu0);
+//       fVec x1 = fVec::loadu(tmp_glu1);
+//       fVec y0 = fVec::loadu(tmp_linear0);
+//       fVec y1 = fVec::loadu(tmp_linear1);
+
+//       // clamp
+//       x0 = at::vec::minimum(x0,limit_v);
+//       x1 = at::vec::minimum(x1,limit_v);
+//       y0 = at::vec::minimum(limit_v, at::vec::maximum(nlimit_v, y0));
+//       y1 = at::vec::minimum(limit_v, at::vec::maximum(nlimit_v, y1));
+//       // x * sigmoid(x * alpha)
+//       x0 = x0 / (one + (x0*alpha_v).neg().exp_u20());
+//       x1 = x1 / (one + (x1*alpha_v).neg().exp_u20());
+//       // (y + 1) * x
+//       x0 = x0 * (y0+one);
+//       x1 = x1 * (y1+one);
+//       // convert
+//       bVec out_vec = convert_from_float_ext<scalar_t>(x0, x1);
+//       out_vec.store(out + d);
+//     }
+//   }
+// }
+
+
+// template <typename scalar_t>
+// inline void clamp_sigmoid_and_mul_stub2(
+//     scalar_t* __restrict__ out, const scalar_t* __restrict__ input, const scalar_t* __restrict__ input2, int64_t size) {
+//   using bVec = at::vec::Vectorized<scalar_t>;
+//   using fVec = at::vec::Vectorized<float>;
+//   const fVec one = fVec(1.f);
+
+//   // no remainder
+// #pragma GCC unroll 4
+//   for (int64_t d = 0; d < size; d += bVec::size()) {
+//     bVec x = bVec::loadu(input + d);
+//     fVec x0, x1;
+//     std::tie(x0, x1) = at::vec::convert_to_float(x);
+//     bVec y = bVec::loadu(input2 + d);
+//     fVec y0, y1;
+//     std::tie(y0, y1) = at::vec::convert_to_float(y);
+//     x0 = x0 / (one + x0.neg().exp_u20());
+//     x1 = x1 / (one + x1.neg().exp_u20());
+//     x0 = x0 * y0;
+//     x1 = x1 * y1;
+//     bVec out_vec = convert_from_float_ext<scalar_t>(x0, x1);
+//     out_vec.store(out + d);
+//   }
+// }
+
 template <typename scalar_t, int BLOCK_N>
 inline void clamp_sigmoid_and_mul(
     scalar_t* __restrict__ output,
     const float* __restrict__ input0,
-    const float* __restrict__ input1,
     int64_t m_size,
     int64_t N,
     const float alpha,
-    const float limit) {
+    const float limit,
+    int64_t offset) {
   using bVec = at::vec::Vectorized<scalar_t>;
   using fVec = at::vec::Vectorized<float>;
 
   const fVec one = fVec(1.f);
+  const fVec zero = fVec(0.f);
   const fVec limit_v = fVec(limit);
   const fVec nlimit_v = fVec(-limit);
   const fVec alpha_v = fVec(alpha);
@@ -342,36 +438,34 @@ inline void clamp_sigmoid_and_mul(
   // no remainder
   for (int64_t m = 0; m < m_size; ++m) {
     scalar_t* __restrict__ out = output + m * N;
-    const float* __restrict__ x = input0 + m * BLOCK_N;
-    const float* __restrict__ y = input1 + m * BLOCK_N;
-
+    const float* __restrict__ cur_ptr = input0 + m * BLOCK_N;
     // TODO: 
     // remove this assert and make block_n common to meet below interleaved x and y
-    static_assert(BLOCK_N == 32);
+    static_assert(BLOCK_N == 64);
+    for (int64_t d = 0; d < BLOCK_N; d += 64) {
 
-    for (int64_t d = 0; d < 2 * BLOCK_N; d += 64) {
       float tmp_glu0[fVec::size()];  // 16
-      float tmp_glu1[fVec::size()];
-      float tmp_linear0[fVec::size()];
-      float tmp_linear1[fVec::size()];
+      float tmp_glu1[fVec::size()];  // 16
+      float tmp_linear0[fVec::size()]; // 16
+      float tmp_linear1[fVec::size()]; // 16
 
       // interleaved: x[2i] = glu, x[2i+1] = linear
       for (int j = 0; j < 16  ; ++j) {
         //x0 [0,2,..30]
-        tmp_glu0[j] = x[d + j * 2];
-        //y0 [1,3,...31]
-        tmp_linear0[j] = x[d + j * 2 + 1];
+        tmp_glu0[j] = cur_ptr[ j * 2];
         //x1 [32,34,..62]
-        tmp_glu1[j] = y[d  + j * 2];
+        tmp_glu1[j] = cur_ptr[ 32 + j * 2];
+        //y0 [1,3,...31]
+        tmp_linear0[j] = cur_ptr[ j * 2 + 1];
         //y1 [33,35,..63]
-        tmp_linear1[j] = y[d  + j * 2 + 1];
+        tmp_linear1[j] = cur_ptr[32  + j * 2 + 1];
       }
       fVec x0 = fVec::loadu(tmp_glu0);
       fVec x1 = fVec::loadu(tmp_glu1);
       fVec y0 = fVec::loadu(tmp_linear0);
       fVec y1 = fVec::loadu(tmp_linear1);
 
-      // clamp
+      //clamp
       x0 = at::vec::minimum(x0,limit_v);
       x1 = at::vec::minimum(x1,limit_v);
       y0 = at::vec::minimum(limit_v, at::vec::maximum(nlimit_v, y0));
@@ -380,13 +474,15 @@ inline void clamp_sigmoid_and_mul(
       x0 = x0 / (one + (x0*alpha_v).neg().exp_u20());
       x1 = x1 / (one + (x1*alpha_v).neg().exp_u20());
       // (y + 1) * x
-      x0 = x0 * (y0+one);
-      x1 = x1 * (y1+one);
+      y0 = y0 + one;
+      y1 = y1 + one;
+      x0 = x0 * y0;
+      x1 = x1 * y1;
       // convert
       bVec out_vec = convert_from_float_ext<scalar_t>(x0, x1);
-      out_vec.store(out + d);
-    }
+      out_vec.store(out  + offset);
   }
+}
 }
 
 
@@ -918,7 +1014,9 @@ void fused_experts_kernel_impl(
     int act_func) {
   // handle 2 tiles per block
   constexpr int64_t BLOCK_M = block_size_m();
-  constexpr int64_t BLOCK_N = block_size_n();
+  constexpr int64_t BLOCK_N = block_size_2n();
+  int num_threads = at::get_num_threads();
+  scalar_t* __restrict__ ic0 = (scalar_t*)((void*)(C_tmp + num_threads * 2 * BLOCK_M * BLOCK_N));
 
   // stage 1: intermediate_cache1 = silu(hidden_states @ w1)
   const int64_t MB = div_up(num_tokens_post_pad, BLOCK_M);
@@ -993,39 +1091,34 @@ void fused_experts_kernel_impl(
             /* A     */ A,
             /* B     */ B1,
             /* C     */ C1);
-        for (int64_t m = 0; m < m_size; ++m) {
-          add_bias_stub(C0 + m * BLOCK_N,  B0_bias, n_size);
-          add_bias_stub(C1 + m * BLOCK_N,  B1_bias, n_size);
-        }
-        // 1.d silu and mul
-        const int64_t offset = offsets[mb];
-        if (act_func == 2){
-          clamp_sigmoid_and_mul<scalar_t, BLOCK_N>(ic1 + offset * N + nb * BLOCK_N, C0, C1, m_size, N, alpha, limit);
-        }else{
-          silu_and_mul<scalar_t, BLOCK_N>(ic1 + offset * N + nb * BLOCK_N, C0, C1, m_size, N);
-        }
+
 
       } else {
-        // fused 1.bcd: silu_and_mul(A @ B0, A @ B1)
+
         const int64_t offset = offsets[mb];
         if (act_func == 2){
-        // TODO: fix the acc issue here, not noly use brgemm
-        tinygemm_kernel(
+          tinygemm_kernel(
+          /* A     */ A,
+          /* B     */ B0,
+          /* C     */ C0,
+          /* M     */ m_size,
+          /* N     */ n_size,
+          /* K     */ K,
+          /* lda   */ K,
+          /* ldb   */ n_size,
+          /* ldc   */ N);
+          tinygemm_kernel(
             /* A     */ A,
-            /* B0    */ B0,
-            /* B1    */ B1,
-            B0_bias,
-            B1_bias,
-            /* C     */ ic1 + offset * N + nb * BLOCK_N,
+            /* B     */ B1,
+            /* C     */ C1,
             /* M     */ m_size,
             /* N     */ n_size,
             /* K     */ K,
             /* lda   */ K,
             /* ldb   */ n_size,
-            /* ldc   */ N,
-            alpha,
-            limit);
+            /* ldc   */ N);
         }else{
+          // fused 1.bcd: silu_and_mul(A @ B0, A @ B1)
         tinygemm_kernel(
             /* A     */ A,
             /* B0    */ B0,
@@ -1039,13 +1132,33 @@ void fused_experts_kernel_impl(
             /* ldc   */ N);
         }
       }
+   
+    for (int64_t m = 0; m < m_size; ++m) {
+      add_bias_stub(C0 + m * BLOCK_N,  B0_bias, n_size);
+      add_bias_stub(C1 + m * BLOCK_N,  B1_bias, n_size);
     }
-
+    // 1.d silu and mul
+    const int64_t offset = offsets[mb];
+    if (act_func == 2){
+      clamp_sigmoid_and_mul<scalar_t, BLOCK_N>(ic1 + offset * N , C0, m_size, N, alpha, limit, 0+ nb*BLOCK_N/2);
+      clamp_sigmoid_and_mul<scalar_t, BLOCK_N>(ic1 + offset * N , C1, m_size, N, alpha, limit, N/2+ nb*BLOCK_N/2);
+    }else{
+      silu_and_mul<scalar_t, BLOCK_N>(ic1 + offset * N + nb * BLOCK_N, C0, C1, m_size, N);
+    }
+    }
     if (is_brgemm_used) {
       at::native::cpublas::brgemm_release();
     }
   });
 
+//   if (act_func == 2){
+//   // stage 1.5: intermediate_cache1 = silu(intermediate_cache0)
+//   at::parallel_for(0, M * topk, 0, [&](int64_t begin, int64_t end) {
+//     for (int64_t m = begin; m < end; ++m) {
+//       clamp_sigmoid_and_mul_stub(ic1 + m * N, ic0 + m * 2 * N, ic0 + m * 2 * N + N, N, alpha, limit, 0);
+//     }
+//   });
+//  }
   // stage 2: intermediate_cache2 = intermediate_cache1 @ w2
   //   w2 : [E, K, N] as [E, OC, IC]
   const int64_t OC = K;  // rename K as OC
@@ -1385,7 +1498,7 @@ at::Tensor fused_experts_cpu(
   auto packed_w2 = is_vnni ? w2 : convert_weight_packed(w2);
 
   constexpr int64_t BLOCK_M = block_size_m();
-  constexpr int64_t BLOCK_N = block_size_n();
+  constexpr int64_t BLOCK_N = block_size_2n();
 
   const auto st = hidden_states.scalar_type();
   CHECK_INPUT(hidden_states);
@@ -1603,6 +1716,7 @@ at::Tensor fused_experts_cpu(
     } else {
       scalar_t* __restrict__ A_tmp = intermediate_cache2 + M * topk * K;
       float* __restrict__ C_tmp = (float*)((void*)(A_tmp + num_threads * BLOCK_M * K));
+      scalar_t* __restrict__ intermediate_cache0 = (scalar_t*)((void*)(C_tmp + num_threads * 2 * BLOCK_M * BLOCK_N));
 
       fused_experts_kernel_impl<scalar_t>(
           out_hidden_states.data_ptr<scalar_t>(),

@@ -16,6 +16,13 @@ inline Vectorized<scalar_t> convert_from_float_ext(const Vectorized<float>& a, c
   return at::vec::convert_from_float<scalar_t>(a, b);
 }
 
+
+template <typename scalar_t, typename std::enable_if_t<is_reduced_floating_point_v<scalar_t>, int> = 0>
+inline Vectorized<scalar_t> convert_from_float_ext(const Vectorized<float>& a) {
+  return at::vec::convert_from_float<scalar_t>(a);
+}
+
+
 // allow f16, bf16
 template <typename scalar_t, typename std::enable_if_t<is_reduced_floating_point_v<scalar_t>, int> = 1>
 inline std::tuple<Vectorized<float>, Vectorized<float>> load_float_vec2(const scalar_t* __restrict__ data) {
@@ -44,6 +51,7 @@ inline Vectorized<at::BFloat16>
 convert_from_float_ext<at::BFloat16>(const Vectorized<float>& a, const Vectorized<float>& b) {
   return (__m512i)(_mm512_cvtne2ps_pbh(__m512(b), __m512(a)));
 }
+
 
 #define CVT_BF16_TO_FP32(a) _mm512_castsi512_ps(_mm512_slli_epi32(_mm512_cvtepu16_epi32(a), 16))
 

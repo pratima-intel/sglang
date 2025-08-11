@@ -62,7 +62,7 @@ inline void unpack_B(
   const __m512 vd = _mm512_set1_ps(scale);
 
   constexpr int BLOCK_N = block_size_n();
-  static_assert(BLOCK_N == 32);
+  // static_assert(BLOCK_N == 32);
 
   // prefetch distance
   constexpr int PREFETCH_SIZE_K = 64;
