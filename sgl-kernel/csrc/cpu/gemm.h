@@ -1,6 +1,6 @@
 #pragma once
 #include <ATen/native/CPUBlas.h>
-
+#include <c10/util/Unroll.h>
 #include "common.h"
 
 // amx-bf16
@@ -166,37 +166,6 @@ void fused_experts_int4_w4a16_kernel_impl(
     int64_t topk,
     int64_t num_tokens_post_pad);
 
-template <typename scalar_t>
-void fused_experts_int4_w4a8_kernel_impl(
-    scalar_t* __restrict__ output,
-    scalar_t* __restrict__ ic0,
-    scalar_t* __restrict__ ic1,
-    scalar_t* __restrict__ ic2,
-    uint8_t* __restrict__ A_tmp,
-    uint8_t* __restrict__ Aq_tmp,
-    float* __restrict__ As_tmp,
-    int32_t* __restrict__ Azp_tmp,
-    float* __restrict__ C_tmp,
-    const scalar_t* __restrict__ input,
-    const uint8_t* __restrict__ packed_w1,
-    const uint8_t* __restrict__ packed_w2,
-    const int8_t* __restrict__ w1z,
-    const int8_t* __restrict__ w2z,
-    const float* __restrict__ w1s,
-    const float* __restrict__ w2s,
-    const int32_t* __restrict__ compensation_w1,
-    const int32_t* __restrict__ compensation_w2,
-    int group_size,
-    const float* __restrict__ topk_weights,
-    const int32_t* __restrict__ sorted_ids,
-    const int32_t* __restrict__ expert_ids,
-    const int32_t* __restrict__ offsets,
-    int64_t M,
-    int64_t N,
-    int64_t K,
-    int64_t E,
-    int64_t topk,
-    int64_t num_tokens_post_pad);
 
 template <typename scalar_t>
 void shared_expert_fp8_kernel_impl(
@@ -286,8 +255,8 @@ void tinygemm_kernel(
     bool brg,
     int64_t block_size_K);
 
-template <typename scalar_t, bool sym_quant_a>
-void inner_dequant_gemm(
+template <typename scalar_t, int64_t N, int64_t ldb>
+void tiny_dequant_gemm_kernel(
     scalar_t* C,
     float* C_temp,
     const uint8_t* A,
@@ -298,9 +267,38 @@ void inner_dequant_gemm(
     const int8_t* qzeros_b,
     const int32_t* compensation,
     int64_t M,
-    int64_t N,
     int64_t K,
     int64_t lda,
-    int64_t ldb,
-    int64_t ldc,
-    bool cpublas_can_pack);
+    int64_t ldc);
+
+template <typename scalar_t>
+void fused_experts_int4_w4a8_kernel_impl(
+    scalar_t* __restrict__ output,
+    scalar_t* __restrict__ ic0,
+    scalar_t* __restrict__ ic1,
+    scalar_t* __restrict__ ic2,
+    uint8_t* __restrict__ A_tmp,
+    uint8_t* __restrict__ Aq_tmp,
+    float* __restrict__ As_tmp,
+    int32_t* __restrict__ Azp_tmp,
+    float* __restrict__ C_tmp,
+    const scalar_t* __restrict__ input,
+    const uint8_t* __restrict__ packed_w1,
+    const uint8_t* __restrict__ packed_w2,
+    const int8_t* __restrict__ w1z,
+    const int8_t* __restrict__ w2z,
+    const float* __restrict__ w1s,
+    const float* __restrict__ w2s,
+    const int32_t* __restrict__ compensation_w1,
+    const int32_t* __restrict__ compensation_w2,
+    int group_size,
+    const float* __restrict__ topk_weights,
+    const int32_t* __restrict__ sorted_ids,
+    const int32_t* __restrict__ expert_ids,
+    const int32_t* __restrict__ offsets,
+    int64_t M,
+    int64_t N,
+    int64_t K,
+    int64_t E,
+    int64_t topk,
+    int64_t num_tokens_post_pad);

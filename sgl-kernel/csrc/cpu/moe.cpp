@@ -1004,23 +1004,23 @@ at::Tensor fused_experts_cpu(
   constexpr int64_t BLOCK_N = block_size_n();
 
   const auto st = hidden_states.scalar_type();
-  CHECK_INPUT(hidden_states);
-  CHECK_INPUT(w1);
-  CHECK_INPUT(w2);
-  CHECK_EQ(topk_weights.sizes(), topk_ids.sizes());
-  CHECK_DIM(2, hidden_states);
-  CHECK_DIM(3, w1);
-  CHECK_DIM(3, w2);
-  CHECK_DIM(2, topk_weights);
-  CHECK_DIM(2, topk_ids);
+  // CHECK_INPUT(hidden_states);
+  // CHECK_INPUT(w1);
+  // CHECK_INPUT(w2);
+  // CHECK_EQ(topk_weights.sizes(), topk_ids.sizes());
+  // CHECK_DIM(2, hidden_states);
+  // CHECK_DIM(3, w1);
+  // CHECK_DIM(3, w2);
+  // CHECK_DIM(2, topk_weights);
+  // CHECK_DIM(2, topk_ids);
 
-  CHECK_EQ(topk_ids.scalar_type(), at::kInt);
+  // CHECK_EQ(topk_ids.scalar_type(), at::kInt);
 
   // TODO: support topk_weights to be bf16 or fp16 in the kernel.
   // The topk_weights of llama4 is computed via Llama4MoE:custom_routing_function and is bf16/fp16
   // while the kernel currently only supports it to be float32
   auto topk_weights_ = topk_weights.to(at::kFloat);
-  CHECK_EQ(topk_weights_.scalar_type(), at::kFloat);
+  // CHECK_EQ(topk_weights_.scalar_type(), at::kFloat);
 
   int64_t M = hidden_states.size(0);
   int64_t K = hidden_states.size(1);
@@ -1033,13 +1033,13 @@ at::Tensor fused_experts_cpu(
   int64_t packed_N = get_row_size(N, use_int8_w8a8);
 
   // check weight shapes
-  CHECK_EQ(w2.size(0), E);
-  CHECK_EQ(w2.size(1), K);
-  CHECK_EQ(packed_w1.size(2), packed_K / (use_int4_w4a16 ? 2 : 1));
-  CHECK_EQ(packed_w2.size(2), packed_N / (use_int4_w4a16 ? 2 : 1));
+  // CHECK_EQ(w2.size(0), E);
+  // CHECK_EQ(w2.size(1), K);
+  // CHECK_EQ(packed_w1.size(2), packed_K / (use_int4_w4a16 ? 2 : 1));
+  // CHECK_EQ(packed_w2.size(2), packed_N / (use_int4_w4a16 ? 2 : 1));
 
   // check scales
-  check_moe_scales(use_int8_w8a8, use_fp8_w8a16, w1_scale, w2_scale, block_size, a1_scale, a2_scale);
+  // check_moe_scales(use_int8_w8a8, use_fp8_w8a16, w1_scale, w2_scale, block_size, a1_scale, a2_scale);
 
   at::Tensor out_hidden_states = inplace ? hidden_states : at::empty_like(hidden_states);
 

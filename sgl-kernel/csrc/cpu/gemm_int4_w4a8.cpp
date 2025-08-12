@@ -1,9 +1,7 @@
-#include <ATen/native/CPUBlas.h>
-#include <c10/util/Unroll.h>
-#include <torch/all.h>
-
-#include "vec.h"
+#include "gemm_int4_w4a8.h"
 #include "gemm.h"
+#include "vec.h"
+
 namespace {
 
 #define BLOCK_N 32
@@ -421,8 +419,8 @@ inline void store_out(const float* y_buf, out_dtype* c_ptr, int64_t m, /* int64_
   }
 }
 
-template <bool sym_quant_a>
-void _dequant_gemm_accum2(
+template <bool cpublas_can_pack, int64_t N, int64_t ldb, bool sym_quant_a>
+void dequant_gemm_accum2(
     float* C,
     const uint8_t* A,
     const float* scales_a,
@@ -432,12 +430,9 @@ void _dequant_gemm_accum2(
     const int8_t* qzeros_b,
     const int32_t* compensation,
     int64_t M,
-    int64_t N,
     int64_t K,
     int64_t lda,
-    int64_t ldb,
-    int64_t ldc,
-    bool cpublas_can_pack) {
+    int64_t ldc ) {
   // Compute GEMM int8 * int8 -> int32
   // dequant result to float by applying scales/qzeros
 #if defined(CPU_CAPABILITY_AVX512)
@@ -737,9 +732,22 @@ at::Tensor int4_scaled_mm_cpu_with_quant(
   }
   return output;
 }
+template <typename scalar_t>
+inline void copy_stub2(scalar_t* __restrict__ out, const float* __restrict__ input, int64_t size) {
+  using Vec = at::vec::Vectorized<scalar_t>;
+  using fVec = at::vec::Vectorized<float>;
+// no remainder
+#pragma GCC unroll 4
+  for (int64_t d = 0; d < size; d += Vec::size()) {
+    fVec x0 = fVec::loadu(input + d);
+    fVec x1 = fVec::loadu(input + d + fVec::size());
+    Vec res = convert_from_float_ext<scalar_t>(x0, x1);
+    res.store(out + d);
+  }
+}
 
-template <typename scalar_t, bool sym_quant_a>
-void inner_dequant_gemm(
+template <typename scalar_t, int64_t N, int64_t ldb>
+void tiny_dequant_gemm_kernel(
     scalar_t* C,
     float* C_temp,
     const uint8_t* A,
@@ -750,16 +758,33 @@ void inner_dequant_gemm(
     const int8_t* qzeros_b,
     const int32_t* compensation,
     int64_t M,
-    int64_t N,
     int64_t K,
     int64_t lda,
-    int64_t ldb,
-    int64_t ldc,
-    bool cpublas_can_pack) {
-  _dequant_gemm_accum2<sym_quant_a>(
-      C_temp, A, scales_a, qzeros_a, B, scales_b, qzeros_b, compensation, M, N, K, lda, ldb, ldc, cpublas_can_pack);
+    int64_t ldc) {
+    int a = BLOCK_K;
+  dequant_gemm_accum2<true, N, ldb, false>(
+      C_temp, A, scales_a, qzeros_a, B, scales_b, qzeros_b, compensation, M, K, lda, ldc);
   // copy from Ctmp to C
   for (int64_t m = 0; m < M; ++m) {
-    copy_stub(C + m * ldc, C_temp + m * BLOCK_N, N);
+    copy_stub2(C + m * ldc, C_temp + m * BLOCK_N, N);
   }
 }
+
+#define INSTANTIATE_TINY_DEQUANT_GEMM_TEMPLATE(TYPE, N_VAL, LDB_VAL) \
+  template void tiny_dequant_gemm_kernel<TYPE, N_VAL, LDB_VAL>(      \
+      TYPE*  C,           \
+      float* C_temp,\
+    const uint8_t* A,\
+    const float* scales_a,\
+    const int32_t* qzeros_a,\
+    const uint8_t* B,\
+    const float* scales_b,\
+    const int8_t* qzeros_b,\
+    const int32_t* compensation,\
+    int64_t M,\
+    int64_t K,\
+    int64_t lda,\
+    int64_t ldc)
+
+INSTANTIATE_TINY_DEQUANT_GEMM_TEMPLATE(at::BFloat16, 32 ,32);
+INSTANTIATE_TINY_DEQUANT_GEMM_TEMPLATE(at::Half, 32 ,32);

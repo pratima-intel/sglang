@@ -1,4 +1,4 @@
-#include "common.h"
+#include "gemm_int4_w4a8.h"
 #include "gemm.h"
 #include "vec.h"
 
@@ -218,7 +218,7 @@ void fused_experts_int4_w4a8_kernel_impl(
     int tid = at::get_thread_num();
     alignas(64) float As[BLOCK_M];
     uint8_t* __restrict__ A = A_tmp + tid * BLOCK_M * K;
-    static bool cpublas_can_pack = cpublas_could_pack();
+    bool cpublas_can_pack = cpublas_could_pack();
     for (int64_t i = begin; i < end; ++i) {
       int64_t mb = i / NB;
       int64_t nb = i % NB;
@@ -245,7 +245,7 @@ void fused_experts_int4_w4a8_kernel_impl(
       const int64_t offset = offsets[mb];
       auto Azp = at::ones({m_size}).to(at::kInt).mul(128);
       int32_t* __restrict__ Azp_data = Azp.data_ptr<int32_t>();
-      inner_dequant_gemm<scalar_t, false>(
+      tiny_dequant_gemm_kernel<scalar_t, BLOCK_N, BLOCK_N>(
           ic0 + offset * 2 * N + nb * BLOCK_N,
           C_tmp + tid * 2 * BLOCK_M * BLOCK_N,
           A,
@@ -256,12 +256,11 @@ void fused_experts_int4_w4a8_kernel_impl(
           Bz,
           B_compensation_w1,
           m_size,
-          n_size,
+          // n_size,
           K,
           K,
-          n_size,
-          2 * N,
-          cpublas_can_pack);
+          // n_size,
+          2 * N);
 
       // tinygemm_kernel<scalar_t>(
       //     /*   A            */ A,
@@ -314,7 +313,7 @@ void fused_experts_int4_w4a8_kernel_impl(
   at::parallel_for(0, MB2 * NB2, 0, [&](int64_t begin, int64_t end) {
     int tid = at::get_thread_num();
     alignas(64) scalar_t C[BLOCK_M * BLOCK_K];
-    static bool cpublas_can_pack = cpublas_could_pack();
+    bool cpublas_can_pack = cpublas_could_pack();
     for (int64_t i = begin; i < end; ++i) {
       int64_t mb = i / NB2;
       int64_t nb = i % NB2;
@@ -338,7 +337,7 @@ void fused_experts_int4_w4a8_kernel_impl(
       const uint8_t* __restrict__ A = Aq_tmp + offsets[mb] * N;
       const float* __restrict__ As = As_tmp + offsets[mb];
       auto Azp = at::ones({m_size}).to(at::kInt).mul(128);
-      inner_dequant_gemm<scalar_t, false>(
+      tiny_dequant_gemm_kernel<scalar_t, BLOCK_N, BLOCK_N>(
           C,
           C_tmp + tid * 2 * BLOCK_M * BLOCK_N,
           A,
@@ -349,12 +348,11 @@ void fused_experts_int4_w4a8_kernel_impl(
           Bz,
           B_compensation_w2,
           m_size,
-          n_size,
+          // n_size,
           IC,
           IC,
-          n_size,
-          BLOCK_N,
-          cpublas_can_pack);
+          // n_size,
+          BLOCK_N);
 
       // tinygemm_kernel<scalar_t>(
       //     /*   A            */ A,
