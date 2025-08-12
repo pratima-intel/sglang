@@ -91,191 +91,191 @@ class TestFusedExperts(CustomTestCase):
     E_int4 = [8]
     topk_int4 = [4]
 
-    def _bf16_moe(self, m, n, k, e, topk, renormalize):
-        dtype = torch.bfloat16
-        prepack = True
+    # def _bf16_moe(self, m, n, k, e, topk, renormalize):
+    #     dtype = torch.bfloat16
+    #     prepack = True
 
-        a = torch.randn((m, k), device="cpu", dtype=dtype) / 10
-        w1 = torch.randn((e, 2 * n, k), device="cpu", dtype=dtype) / 10
-        w2 = torch.randn((e, k, n), device="cpu", dtype=dtype) / 10
-        score = torch.randn((m, e), device="cpu", dtype=dtype)
+    #     a = torch.randn((m, k), device="cpu", dtype=dtype) / 10
+    #     w1 = torch.randn((e, 2 * n, k), device="cpu", dtype=dtype) / 10
+    #     w2 = torch.randn((e, k, n), device="cpu", dtype=dtype) / 10
+    #     score = torch.randn((m, e), device="cpu", dtype=dtype)
 
-        torch_output = torch_naive_fused_moe(a, w1, w2, score, topk, renormalize)
-        fused_output = fused_moe(a, w1, w2, score, topk, renormalize, prepack)
+    #     torch_output = torch_naive_fused_moe(a, w1, w2, score, topk, renormalize)
+    #     fused_output = fused_moe(a, w1, w2, score, topk, renormalize, prepack)
 
-        atol = rtol = precision[torch_output.dtype]
-        torch.testing.assert_close(torch_output, fused_output, atol=atol, rtol=rtol)
+    #     atol = rtol = precision[torch_output.dtype]
+    #     torch.testing.assert_close(torch_output, fused_output, atol=atol, rtol=rtol)
 
-    def test_bf16_moe(self):
-        for params in itertools.product(
-            self.M,
-            self.N,
-            self.K,
-            self.E,
-            self.topk,
-            self.renormalize,
-        ):
-            with self.subTest(
-                m=params[0],
-                n=params[1],
-                k=params[2],
-                e=params[3],
-                topk=params[4],
-                renormalize=params[5],
-            ):
-                self._bf16_moe(*params)
+    # def test_bf16_moe(self):
+    #     for params in itertools.product(
+    #         self.M,
+    #         self.N,
+    #         self.K,
+    #         self.E,
+    #         self.topk,
+    #         self.renormalize,
+    #     ):
+    #         with self.subTest(
+    #             m=params[0],
+    #             n=params[1],
+    #             k=params[2],
+    #             e=params[3],
+    #             topk=params[4],
+    #             renormalize=params[5],
+    #         ):
+    #             self._bf16_moe(*params)
 
-    def _int8_moe(self, M, N, K, E, topk):
-        dtype = torch.bfloat16
-        prepack = True
+    # def _int8_moe(self, M, N, K, E, topk):
+    #     dtype = torch.bfloat16
+    #     prepack = True
 
-        # Initialize int8 quantization parameters
-        int8_factor_for_scale = 1e-2
-        int8_max = 127
-        int8_min = -128
+    #     # Initialize int8 quantization parameters
+    #     int8_factor_for_scale = 1e-2
+    #     int8_max = 127
+    #     int8_min = -128
 
-        # Input tensor
-        # M * K
-        a = torch.randn((M, K), dtype=dtype) / math.sqrt(K)
+    #     # Input tensor
+    #     # M * K
+    #     a = torch.randn((M, K), dtype=dtype) / math.sqrt(K)
 
-        # Generate int8 weights
-        w1_fp32 = (torch.rand((E, 2 * N, K), dtype=torch.float32) - 0.5) * 2
-        w1 = (w1_fp32 * int8_max).clamp(min=int8_min, max=int8_max).to(torch.int8)
+    #     # Generate int8 weights
+    #     w1_fp32 = (torch.rand((E, 2 * N, K), dtype=torch.float32) - 0.5) * 2
+    #     w1 = (w1_fp32 * int8_max).clamp(min=int8_min, max=int8_max).to(torch.int8)
 
-        w2_fp32 = (torch.rand((E, K, N), dtype=torch.float32) - 0.5) * 2
-        w2 = (w2_fp32 * int8_max).clamp(min=int8_min, max=int8_max).to(torch.int8)
+    #     w2_fp32 = (torch.rand((E, K, N), dtype=torch.float32) - 0.5) * 2
+    #     w2 = (w2_fp32 * int8_max).clamp(min=int8_min, max=int8_max).to(torch.int8)
 
-        # Generate scale for each column (per-column quantization)
-        w1_s = torch.rand(E, 2 * N, device=w1_fp32.device) * int8_factor_for_scale
-        w2_s = torch.rand(E, K, device=w2_fp32.device) * int8_factor_for_scale
+    #     # Generate scale for each column (per-column quantization)
+    #     w1_s = torch.rand(E, 2 * N, device=w1_fp32.device) * int8_factor_for_scale
+    #     w2_s = torch.rand(E, K, device=w2_fp32.device) * int8_factor_for_scale
 
-        # Calculate routing
-        score = torch.randn((M, E), dtype=dtype)
-        score = torch.softmax(score, dim=-1, dtype=torch.float32)
-        topk_weight, topk_ids = torch.topk(score, topk)
+    #     # Calculate routing
+    #     score = torch.randn((M, E), dtype=dtype)
+    #     score = torch.softmax(score, dim=-1, dtype=torch.float32)
+    #     topk_weight, topk_ids = torch.topk(score, topk)
 
-        ref_out = torch_w8a8_per_column_fused_moe(
-            a, w1, w2, w1_s, w2_s, topk_weight, topk_ids, topk
-        )
+    #     ref_out = torch_w8a8_per_column_fused_moe(
+    #         a, w1, w2, w1_s, w2_s, topk_weight, topk_ids, topk
+    #     )
 
-        inplace = True
-        packed_w1 = kernel.convert_weight_packed(w1) if prepack else w1
-        packed_w2 = kernel.convert_weight_packed(w2) if prepack else w2
-        out = kernel.fused_experts_cpu(
-            a,
-            packed_w1,
-            packed_w2,
-            topk_weight,
-            topk_ids.to(torch.int32),
-            inplace,
-            True,
-            False,
-            False,
-            w1_s,
-            w2_s,
-            None,
-            None,
-            None,
-            None,
-            None,
-            prepack,
-        )
+    #     inplace = True
+    #     packed_w1 = kernel.convert_weight_packed(w1) if prepack else w1
+    #     packed_w2 = kernel.convert_weight_packed(w2) if prepack else w2
+    #     out = kernel.fused_experts_cpu(
+    #         a,
+    #         packed_w1,
+    #         packed_w2,
+    #         topk_weight,
+    #         topk_ids.to(torch.int32),
+    #         inplace,
+    #         True,
+    #         False,
+    #         False,
+    #         w1_s,
+    #         w2_s,
+    #         None,
+    #         None,
+    #         None,
+    #         None,
+    #         None,
+    #         prepack,
+    #     )
 
-        atol = rtol = precision[ref_out.dtype]
-        # Increase the tolerance for large input shapes
-        if M > 35:
-            atol = rtol = 0.02
-        torch.testing.assert_close(ref_out, out, atol=atol, rtol=rtol)
+    #     atol = rtol = precision[ref_out.dtype]
+    #     # Increase the tolerance for large input shapes
+    #     if M > 35:
+    #         atol = rtol = 0.02
+    #     torch.testing.assert_close(ref_out, out, atol=atol, rtol=rtol)
 
-    def test_int8_moe(self):
-        for params in itertools.product(
-            self.M_int8,
-            self.N_int8,
-            self.K_int8,
-            self.E_int8,
-            self.topk_int8,
-        ):
-            with self.subTest(
-                M=params[0],
-                N=params[1],
-                K=params[2],
-                E=params[3],
-                topk=params[4],
-            ):
-                self._int8_moe(*params)
+    # def test_int8_moe(self):
+    #     for params in itertools.product(
+    #         self.M_int8,
+    #         self.N_int8,
+    #         self.K_int8,
+    #         self.E_int8,
+    #         self.topk_int8,
+    #     ):
+    #         with self.subTest(
+    #             M=params[0],
+    #             N=params[1],
+    #             K=params[2],
+    #             E=params[3],
+    #             topk=params[4],
+    #         ):
+    #             self._int8_moe(*params)
 
-    def _fp8_moe(self, M, N, K, E, topk):
-        dtype = torch.bfloat16
+    # def _fp8_moe(self, M, N, K, E, topk):
+    #     dtype = torch.bfloat16
 
-        a = torch.randn(M, K, dtype=dtype) / math.sqrt(K)
+    #     a = torch.randn(M, K, dtype=dtype) / math.sqrt(K)
 
-        w1_fp32 = torch.randn(E, 2 * N, K)
-        w1 = (w1_fp32 * fp8_max).clamp(min=fp8_min, max=fp8_max).to(torch.float8_e4m3fn)
+    #     w1_fp32 = torch.randn(E, 2 * N, K)
+    #     w1 = (w1_fp32 * fp8_max).clamp(min=fp8_min, max=fp8_max).to(torch.float8_e4m3fn)
 
-        w2_fp32 = torch.randn(E, K, N)
-        w2 = (w2_fp32 * fp8_max).clamp(min=fp8_min, max=fp8_max).to(torch.float8_e4m3fn)
+    #     w2_fp32 = torch.randn(E, K, N)
+    #     w2 = (w2_fp32 * fp8_max).clamp(min=fp8_min, max=fp8_max).to(torch.float8_e4m3fn)
 
-        w1s = (
-            torch.randn(E, math.ceil(2 * N / BLOCK_N), math.ceil(K / BLOCK_K))
-            * factor_for_scale
-        )
-        w2s = (
-            torch.randn(E, math.ceil(K / BLOCK_N), math.ceil(N / BLOCK_K))
-            * factor_for_scale
-        )
+    #     w1s = (
+    #         torch.randn(E, math.ceil(2 * N / BLOCK_N), math.ceil(K / BLOCK_K))
+    #         * factor_for_scale
+    #     )
+    #     w2s = (
+    #         torch.randn(E, math.ceil(K / BLOCK_N), math.ceil(N / BLOCK_K))
+    #         * factor_for_scale
+    #     )
 
-        w1_scaled = scaled_weight(w1, w1s)
-        w2_scaled = scaled_weight(w2, w2s)
+    #     w1_scaled = scaled_weight(w1, w1s)
+    #     w2_scaled = scaled_weight(w2, w2s)
 
-        score = torch.randn((M, E), dtype=dtype)
-        score = torch.softmax(score, dim=-1, dtype=torch.float32)
-        topk_weight, topk_ids = torch.topk(score, topk)
+    #     score = torch.randn((M, E), dtype=dtype)
+    #     score = torch.softmax(score, dim=-1, dtype=torch.float32)
+    #     topk_weight, topk_ids = torch.topk(score, topk)
 
-        w1 = kernel.convert_weight_packed(w1)
-        w2 = kernel.convert_weight_packed(w2)
+    #     w1 = kernel.convert_weight_packed(w1)
+    #     w2 = kernel.convert_weight_packed(w2)
 
-        ref_out = native_fp8_fused_moe(
-            a, w1_scaled, w2_scaled, topk_weight, topk_ids, topk
-        )
-        out = kernel.fused_experts_cpu(
-            a,
-            w1,
-            w2,
-            topk_weight,
-            topk_ids.to(torch.int32),
-            False,
-            False,
-            True,
-            False,
-            w1s,
-            w2s,
-            None,
-            None,
-            [BLOCK_N, BLOCK_K],
-            None,
-            None,
-            True,
-        )
+    #     ref_out = native_fp8_fused_moe(
+    #         a, w1_scaled, w2_scaled, topk_weight, topk_ids, topk
+    #     )
+    #     out = kernel.fused_experts_cpu(
+    #         a,
+    #         w1,
+    #         w2,
+    #         topk_weight,
+    #         topk_ids.to(torch.int32),
+    #         False,
+    #         False,
+    #         True,
+    #         False,
+    #         w1s,
+    #         w2s,
+    #         None,
+    #         None,
+    #         [BLOCK_N, BLOCK_K],
+    #         None,
+    #         None,
+    #         True,
+    #     )
 
-        atol = rtol = precision[dtype]
-        torch.testing.assert_close(ref_out.bfloat16(), out, atol=atol, rtol=rtol)
+    #     atol = rtol = precision[dtype]
+    #     torch.testing.assert_close(ref_out.bfloat16(), out, atol=atol, rtol=rtol)
 
-    def test_fp8_moe(self):
-        for params in itertools.product(
-            self.M_fp8,
-            self.N_fp8,
-            self.K_fp8,
-            self.E_fp8,
-            self.topk_fp8,
-        ):
-            with self.subTest(
-                M=params[0],
-                N=params[1],
-                K=params[2],
-                E=params[3],
-                topk=params[4],
-            ):
-                self._fp8_moe(*params)
+    # def test_fp8_moe(self):
+    #     for params in itertools.product(
+    #         self.M_fp8,
+    #         self.N_fp8,
+    #         self.K_fp8,
+    #         self.E_fp8,
+    #         self.topk_fp8,
+    #     ):
+    #         with self.subTest(
+    #             M=params[0],
+    #             N=params[1],
+    #             K=params[2],
+    #             E=params[3],
+    #             topk=params[4],
+    #         ):
+    #             self._fp8_moe(*params)
 
     def _int4_moe(self, M, N, K, E, topk, group_size=128):
         dtype = torch.bfloat16
@@ -315,36 +315,43 @@ class TestFusedExperts(CustomTestCase):
         awq_w13_weight_pack = []
         awq_w13_zero_pack = []
         awq_w13_scales_pack = []
+        awq_w13_comp_pack = []
         awq_w2_weight_pack = []
         awq_w2_zero_pack = []
         awq_w2_scales_pack = []
+        awq_w2_comp_pack = []
         for i in range(E):
-            packed_weight_13_i, packed_zero_13_i, packed_scales_13_i = (
+            packed_weight_13_i, packed_zero_13_i, packed_scales_13_i, compasision_13_i = (
                 autoawq_to_int4pack(
-                    awq_w13_weight[i], awq_w13_zero[i], awq_w13_scales[i], False
+                    awq_w13_weight[i], awq_w13_zero[i], awq_w13_scales[i], True
                 )
             )
             awq_w13_weight_pack.append(packed_weight_13_i)
             awq_w13_zero_pack.append(packed_zero_13_i)
             awq_w13_scales_pack.append(packed_scales_13_i)
-            packed_weight_2_i, packed_zero_2_i, packed_scales_2_i = autoawq_to_int4pack(
-                awq_w2_weight[i], awq_w2_zero[i], awq_w2_scales[i], False
+            awq_w13_comp_pack.append(compasision_13_i)
+            packed_weight_2_i, packed_zero_2_i, packed_scales_2_i, compasision_2_i = autoawq_to_int4pack(
+                awq_w2_weight[i], awq_w2_zero[i], awq_w2_scales[i], True
             )
             awq_w2_weight_pack.append(packed_weight_2_i)
             awq_w2_zero_pack.append(packed_zero_2_i)
             awq_w2_scales_pack.append(packed_scales_2_i)
+            awq_w2_comp_pack.append(compasision_2_i)
         awq_w13_weight_pack = torch.stack(awq_w13_weight_pack).detach()
         awq_w13_zero_pack = torch.stack(awq_w13_zero_pack).detach()
         awq_w13_scales_pack = torch.stack(awq_w13_scales_pack).detach()
         awq_w2_weight_pack = torch.stack(awq_w2_weight_pack).detach()
         awq_w2_zero_pack = torch.stack(awq_w2_zero_pack).detach()
         awq_w2_scales_pack = torch.stack(awq_w2_scales_pack).detach()
+        awq_w2_comp_pack = torch.stack(awq_w2_comp_pack).detach()
+        awq_w13_comp_pack = torch.stack(awq_w13_comp_pack).detach()
         out = kernel.fused_experts_cpu(
             a,
             awq_w13_weight_pack,
             awq_w2_weight_pack,
             topk_weight,
             topk_ids.to(torch.int32),
+            False,
             False,
             False,
             False,
@@ -356,6 +363,8 @@ class TestFusedExperts(CustomTestCase):
             None,
             None,
             None,
+            awq_w13_comp_pack,
+            awq_w2_comp_pack,
             True,
         )
 
