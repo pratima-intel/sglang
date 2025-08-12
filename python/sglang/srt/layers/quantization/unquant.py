@@ -219,16 +219,7 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, CustomOp):
 
         # Pack weight for get better performance on CPU
         if not _moe_torch_native and  _is_cpu and _is_cpu_amx_available:
-            import copy
-            w13_weight1 = copy.deepcopy(layer.w13_weight)
-            w2_weight1 = copy.deepcopy(layer.w2_weight)
             _amx_process_weight_after_loading(layer, ["w13_weight", "w2_weight"])
-            layer.w13_weight1 = torch.nn.Parameter(layer.w13_weight, requires_grad=False)
-            layer.w2_weight1 = torch.nn.Parameter(layer.w2_weight, requires_grad=False)
-            layer.w13_weight = torch.nn.Parameter(w13_weight1, requires_grad=False)
-            layer.w2_weight = torch.nn.Parameter(w2_weight1, requires_grad=False)
-            layer.w13_weight_bias = torch.nn.Parameter(torch.zeros_like(layer.w13_weight_bias), requires_grad=False)
-            layer.w2_weight_bias = torch.nn.Parameter(torch.zeros_like(layer.w2_weight_bias), requires_grad=False)
         return
 
     def apply(

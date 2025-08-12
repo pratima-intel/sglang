@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-DEFAULT_MOE_PADDING_SIZE = 64
+DEFAULT_MOE_PADDING_SIZE = 32
 
 
 if TYPE_CHECKING:
