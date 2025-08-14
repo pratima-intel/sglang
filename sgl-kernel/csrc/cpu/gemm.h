@@ -269,7 +269,8 @@ void tiny_dequant_gemm_kernel(
     int64_t M,
     int64_t K,
     int64_t lda,
-    int64_t ldc);
+    int64_t ldc_f,
+    int64_t ldc_s);
 
 template <typename scalar_t>
 void fused_experts_int4_w4a8_kernel_impl(
@@ -301,4 +302,5 @@ void fused_experts_int4_w4a8_kernel_impl(
     int64_t K,
     int64_t E,
     int64_t topk,
-    int64_t num_tokens_post_pad);
+    int64_t num_tokens_post_pad,
+    int64_t block_k);

@@ -1,7 +1,6 @@
-#include "gemm_int4_w4a8.h"
 #include "gemm.h"
 #include "vec.h"
-
+#include "common.h"
 namespace {
 static bool cpublas_checked = false;
 static bool cpublas_can_pack = false;
@@ -195,9 +194,26 @@ void fused_experts_int4_w4a8_kernel_impl(
     int64_t K,
     int64_t E,
     int64_t topk,
-    int64_t num_tokens_post_pad) {
+    int64_t num_tokens_post_pad,
+    int64_t block_k) {
   constexpr int64_t BLOCK_M = block_size_m();
   constexpr int64_t BLOCK_N = block_size_n();
+
+  // int64_t buffer_size_nbytes = M * topk * N * 2 
+  //                              M * topk * K * 2 +
+  //                              num_threads * BLOCK_M * K +
+  //                              num_threads * 2 * BLOCK_M * BLOCK_N * sizeof(float)  +
+  //                              M * topk * 2 * N * 2 +
+  //                              max(M * K, M * topk * N)  +
+  //                              M * topk * sizeof(float);
+
+  // intermediate_cache1 (scalar_t):     START + M * topk * N
+  // intermediate_cache2 (scalar_t):     + M * topk * K
+  // A_tmp (uint8_t):                    + num_threads * BLOCK_M * K
+  // C_tmp (float):                      + num_threads * 2 * BLOCK_M * BLOCK_N
+  // intermediate_cache0 (scalar_t):     + M * topk * 2 * N
+  // Aq_tmp (uint8_t):                   + max(M * K, M * topk * N)
+  // As_tmp (float):                     + M * topk
 
   // stage 0: quantize input to uint8, [M, K]
   at::parallel_for(0, M, 0, [&](int64_t begin, int64_t end) {
@@ -209,8 +225,18 @@ void fused_experts_int4_w4a8_kernel_impl(
   const int64_t MB = div_up(num_tokens_post_pad, BLOCK_M);
   const int64_t NB = div_up(2 * N, BLOCK_N);
 
-  const int64_t stride_e = 2 * N * K;
+
   const int64_t stride_n = K;
+  int64_t block_per_group = group_size / block_k;
+  int64_t Kc = K / block_k;
+  constexpr int64_t block_n = BLOCK_N;
+  int64_t num_groups = K / group_size;
+
+  const int64_t stride_e = 2 * N * K / 2;
+  const int64_t stride_e_comp = 2 * N * Kc;
+  // weight shape = [Nc, Kc, block_k, block_n/2]
+  // scales/qzeros shape = [Nc, G, block_n]
+  // compensation shape = [Nc, Kc, block_n]
 
   // here we only parallel on half of 2N to fuse silu_and_mul with gemm
   at::parallel_for(0, MB * NB, 0, [&](int64_t begin, int64_t end) {
@@ -222,46 +248,49 @@ void fused_experts_int4_w4a8_kernel_impl(
     for (int64_t i = begin; i < end; ++i) {
       int64_t mb = i / NB;
       int64_t nb = i % NB;
-
       int64_t n_size = std::min(2 * N - nb * BLOCK_N, BLOCK_N);
 
       // B shape [K, n_size] in vnni format
       int32_t expert_id = expert_ids[mb];
-      const uint8_t* __restrict__ B = packed_w1 + (expert_id * stride_e + nb * BLOCK_N * stride_n) / 2;
-      const int32_t* __restrict__ B_compensation_w1 = compensation_w1 + expert_id * stride_e + nb * BLOCK_N * stride_n;
+      const uint8_t* __restrict__ B = packed_w1 + expert_id * stride_e;
+      const int32_t* __restrict__ B_compensation_w1 = compensation_w1 + expert_id * stride_e_comp;
+
       // Bz and Bs: [E, K/gs, 2N]
-      const int8_t* __restrict__ Bz = w1z + expert_id * (K / group_size) * (2 * N) + nb * BLOCK_N;
-      const float* __restrict__ Bs = w1s + expert_id * (K / group_size) * (2 * N) + nb * BLOCK_N;
+      const int8_t* __restrict__ Bz = w1z + expert_id * (num_groups) * (2 * N);
+      const float* __restrict__ Bs = w1s + expert_id * (num_groups) * (2 * N);
 
       // 1.a load A
       const int32_t* A_ids = sorted_ids + mb * BLOCK_M;
       int64_t m_size = offsets[mb + 1] - offsets[mb];
 
+      // copy to A [BLOCK_M, K]
       for (int64_t m = 0; m < m_size; ++m) {
         int32_t index = A_ids[m] / topk;
         copy_stub(A + m * K, Aq_tmp + index * K, K);
         As[m] = As_tmp[index];
       }
+
       const int64_t offset = offsets[mb];
       auto Azp = at::ones({m_size}).to(at::kInt).mul(128);
       int32_t* __restrict__ Azp_data = Azp.data_ptr<int32_t>();
-      tiny_dequant_gemm_kernel<scalar_t, BLOCK_N, BLOCK_N>(
-          ic0 + offset * 2 * N + nb * BLOCK_N,
-          C_tmp + tid * 2 * BLOCK_M * BLOCK_N,
-          A,
-          As,
-          Azp_data,
-          B,
-          Bs,
-          Bz,
-          B_compensation_w1,
-          m_size,
-          // n_size,
-          K,
-          K,
-          // n_size,
-          2 * N);
 
+      for (int kci = 0; kci < Kc; ++kci) {
+        tiny_dequant_gemm_kernel<scalar_t, BLOCK_N, BLOCK_N/2>(
+            ic0 + offset * 2 * N + nb * BLOCK_N,
+            C_tmp + tid * 2 * BLOCK_M * BLOCK_N,
+            A + kci * block_k,
+            As,
+            Azp_data,
+            B + (nb * Kc + kci) * BLOCK_N * block_k / 2 /*B*/,
+            Bs + nb * block_n * num_groups + kci / block_per_group * block_n /*scales_b*/,
+            Bz + nb * block_n * num_groups + kci / block_per_group * block_n /*qzeros_b*/,
+            B_compensation_w1 + + nb * block_n * Kc + kci * block_n,
+            m_size,
+            block_k,
+            K,
+            BLOCK_N,
+            2*N);
+      }
       // tinygemm_kernel<scalar_t>(
       //     /*   A            */ A,
       //     /*   B            */ B,
@@ -306,9 +335,11 @@ void fused_experts_int4_w4a8_kernel_impl(
   const int64_t IC = N;  // rename N as IC
   const int64_t MB2 = MB;
   const int64_t NB2 = div_up(OC, BLOCK_N);
-  const int64_t stride_e2 = OC * IC;
   const int64_t stride_oc = IC;
-
+  num_groups = IC / group_size;
+  Kc = IC / block_k;
+  const int64_t stride_e2 = OC * IC/2;
+  const int64_t stride_e2_comp = OC * Kc;
   // parallel on [MB2, NB2]
   at::parallel_for(0, MB2 * NB2, 0, [&](int64_t begin, int64_t end) {
     int tid = at::get_thread_num();
@@ -325,35 +356,35 @@ void fused_experts_int4_w4a8_kernel_impl(
 
       // B shape [IC, n_size] in vnni format
       int32_t expert_id = expert_ids[mb];
-      const uint8_t* __restrict__ B = packed_w2 + (expert_id * stride_e2 + nb * BLOCK_N * stride_oc) / 2;
-      const int32_t* __restrict__ B_compensation_w2 = compensation_w2 + expert_id * stride_e2 + nb * BLOCK_N * stride_oc;
+      const uint8_t* __restrict__ B = packed_w2 + expert_id * stride_e2;
+      const int32_t* __restrict__ B_compensation_w2 = compensation_w2 + expert_id * stride_e2_comp;
 
       // Bz and Bs: [E, IC/gs, OC]
-      const int8_t* __restrict__ Bz = w2z + expert_id * (IC / group_size) * OC + nb * BLOCK_N;
-      const float* __restrict__ Bs = w2s + expert_id * (IC / group_size) * OC + nb * BLOCK_N;
+      const int8_t* __restrict__ Bz = w2z + expert_id * (num_groups) * OC;
+      const float* __restrict__ Bs = w2s + expert_id * (num_groups) * OC;
 
       // A ptr from ic1 of [M * topk, N] in sorted order
       // so as to avoid copy A to tmp buffer again
       const uint8_t* __restrict__ A = Aq_tmp + offsets[mb] * N;
       const float* __restrict__ As = As_tmp + offsets[mb];
       auto Azp = at::ones({m_size}).to(at::kInt).mul(128);
-      tiny_dequant_gemm_kernel<scalar_t, BLOCK_N, BLOCK_N>(
-          C,
-          C_tmp + tid * 2 * BLOCK_M * BLOCK_N,
-          A,
-          As,
-          Azp.data_ptr<int32_t>(),
-          B,
-          Bs,
-          Bz,
-          B_compensation_w2,
-          m_size,
-          // n_size,
-          IC,
-          IC,
-          // n_size,
-          BLOCK_N);
-
+      for (int kci = 0; kci < Kc; ++kci) {
+        tiny_dequant_gemm_kernel<scalar_t, BLOCK_N, BLOCK_N/2>(
+            C,
+            C_tmp + tid * 2 * BLOCK_M * BLOCK_N,
+            A +  kci * block_k,
+            As ,
+            Azp.data_ptr<int32_t>(),
+            B + (nb * Kc + kci) * BLOCK_N * block_k / 2 ,
+            Bs + nb * block_n * num_groups + kci / block_per_group * block_n /*scales_b*/,
+            Bz + nb * block_n * num_groups + kci / block_per_group * block_n /*zeros_b*/,
+            B_compensation_w2 + nb * block_n * Kc + kci * block_n,
+            m_size,
+            block_k,
+            IC,
+            BLOCK_N,
+            BLOCK_N);
+      }
       // tinygemm_kernel<scalar_t>(
       //     /*   A            */ A,
       //     /*   B            */ B,
@@ -426,7 +457,8 @@ void fused_experts_int4_w4a8_kernel_impl(
       int64_t K,                                           \
       int64_t E,                                           \
       int64_t topk,                                        \
-      int64_t num_tokens_post_pad)
+      int64_t num_tokens_post_pad, \
+      int64_t block_k)
 
 INSTANTIATE_MOE_INT4_W4A8_TEMPLATE(at::BFloat16);
 INSTANTIATE_MOE_INT4_W4A8_TEMPLATE(at::Half);

@@ -345,6 +345,10 @@ class TestFusedExperts(CustomTestCase):
         awq_w2_scales_pack = torch.stack(awq_w2_scales_pack).detach()
         awq_w2_comp_pack = torch.stack(awq_w2_comp_pack).detach()
         awq_w13_comp_pack = torch.stack(awq_w13_comp_pack).detach()
+        print(awq_w13_weight_pack.shape)
+        print(awq_w13_zero_pack.shape)
+        print(awq_w13_comp_pack.shape)
+        print(awq_w2_weight_pack.shape)
         out = kernel.fused_experts_cpu(
             a,
             awq_w13_weight_pack,
@@ -369,6 +373,9 @@ class TestFusedExperts(CustomTestCase):
         )
 
         atol = rtol = precision[dtype]
+        print(ref_out)
+        print("=================")
+        print(out)
         torch.testing.assert_close(ref_out.bfloat16(), out, atol=atol, rtol=rtol)
 
     def test_int4_moe(self):
