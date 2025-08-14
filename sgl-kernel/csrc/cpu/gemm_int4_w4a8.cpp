@@ -1,4 +1,3 @@
-#include "gemm_int4_w4a8.h"
 #include "gemm.h"
 #include "vec.h"
 
@@ -760,13 +759,13 @@ void tiny_dequant_gemm_kernel(
     int64_t M,
     int64_t K,
     int64_t lda,
-    int64_t ldc) {
-    int a = BLOCK_K;
+    int64_t ldc_f,
+    int64_t ldc_s) {
   dequant_gemm_accum2<true, N, ldb, false>(
-      C_temp, A, scales_a, qzeros_a, B, scales_b, qzeros_b, compensation, M, K, lda, ldc);
+      C_temp, A, scales_a, qzeros_a, B, scales_b, qzeros_b, compensation, M, K, lda, ldc_f);
   // copy from Ctmp to C
   for (int64_t m = 0; m < M; ++m) {
-    copy_stub2(C + m * ldc, C_temp + m * BLOCK_N, N);
+    copy_stub2<scalar_t>(C + m * ldc_s, C_temp + m * ldc_f, BLOCK_N);
   }
 }
 
@@ -784,7 +783,10 @@ void tiny_dequant_gemm_kernel(
     int64_t M,\
     int64_t K,\
     int64_t lda,\
-    int64_t ldc)
+    int64_t ldc_f, \
+    int64_t ldc_s)
 
+INSTANTIATE_TINY_DEQUANT_GEMM_TEMPLATE(at::BFloat16, 32 ,16);
+INSTANTIATE_TINY_DEQUANT_GEMM_TEMPLATE(at::Half, 32 ,16);
 INSTANTIATE_TINY_DEQUANT_GEMM_TEMPLATE(at::BFloat16, 32 ,32);
 INSTANTIATE_TINY_DEQUANT_GEMM_TEMPLATE(at::Half, 32 ,32);

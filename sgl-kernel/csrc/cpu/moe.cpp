@@ -1024,7 +1024,7 @@ at::Tensor fused_experts_cpu(
 
   int64_t M = hidden_states.size(0);
   int64_t K = hidden_states.size(1);
-  int64_t N = w1.size(1) / 2;
+  int64_t N = use_int4_w4a8? w1.size(1)* w1.size(4) : w1.size(1) / 2;
   int64_t E = w1.size(0);
   int64_t topk = topk_weights_.size(1);
 
@@ -1096,7 +1096,7 @@ at::Tensor fused_experts_cpu(
   //   8. B_tmp : [T, BLOCK_N, std::max(K, N)]
   //
   int64_t buffer_size_nbytes = M * topk * N * 2 + M * topk * K * 2 +
-                               num_threads * BLOCK_M * K * (use_int8_w8a8 ? 1 : 2) +
+                               num_threads * BLOCK_M * K * (use_int8_w8a8 | use_int4_w4a8 ? 1 : 2) +
                                num_threads * 2 * BLOCK_M * BLOCK_N * sizeof(float);
 
   if (use_int8_w8a8) {
@@ -1108,7 +1108,9 @@ at::Tensor fused_experts_cpu(
   if (use_int4_w4a16) {
     buffer_size_nbytes += M * topk * 2 * N * 2 + num_threads * BLOCK_N * std::max(K, N) * 2;
   }
-
+  if (use_int4_w4a8) {
+    buffer_size_nbytes += M * topk * 2 * N * 2 + std::max(M * K, M * topk * N) + M * topk * sizeof(float);
+  }
   auto buffer2 = at::empty({buffer_size_nbytes}, hidden_states.options().dtype(at::kChar));
 
   AT_DISPATCH_REDUCED_FLOATING_TYPES(st, "fused_experts_kernel_impl", [&] {
@@ -1217,16 +1219,17 @@ at::Tensor fused_experts_cpu(
           topk,
           num_tokens_post_pad);
     } else if (use_int4_w4a8) {
-      // scalar_t* __restrict__ A_tmp = intermediate_cache2 + M * topk * K;
-      // float* __restrict__ C_tmp = (float*)((void*)(A_tmp + num_threads * BLOCK_M * K));  // Ctmp is ignored?
       uint8_t* __restrict__ A_tmp = (uint8_t*)((void*)(intermediate_cache2 + M * topk * K));
       float* __restrict__ C_tmp = (float*)((void*)(A_tmp + num_threads * BLOCK_M * K));
       scalar_t* __restrict__ intermediate_cache0 = (scalar_t*)((void*)(C_tmp + num_threads * 2 * BLOCK_M * BLOCK_N));
-      const int group_size = K / w1_zero.value().size(1);
-
-      uint8_t* __restrict__ Aq_tmp = (uint8_t*)((void*)(C_tmp + num_threads * 2 * BLOCK_M * BLOCK_N));
+      uint8_t* __restrict__ Aq_tmp = (uint8_t*)((void*)(intermediate_cache0 + M * topk * 2 * N));
       float* __restrict__ As_tmp = (float*)((void*)(Aq_tmp + std::max(M * K, M * topk * N)));
 
+      // weight shape = [E, Nc, Kc, block_k, block_n/2]
+      // scales/qzeros shape = [E, Nc, G, block_n]
+      int64_t block_k = packed_w1.size(3);
+      int64_t num_groups = w1_scale.value().size(2);
+      const int group_size = K / num_groups;
       // TODO: check scales and zeros
       fused_experts_int4_w4a8_kernel_impl<scalar_t>(
           out_hidden_states.data_ptr<scalar_t>(),
@@ -1257,7 +1260,8 @@ at::Tensor fused_experts_cpu(
           K,
           E,
           topk,
-          num_tokens_post_pad);
+          num_tokens_post_pad,
+          block_k);
     } else {
       scalar_t* __restrict__ A_tmp = intermediate_cache2 + M * topk * K;
       float* __restrict__ C_tmp = (float*)((void*)(A_tmp + num_threads * BLOCK_M * K));
