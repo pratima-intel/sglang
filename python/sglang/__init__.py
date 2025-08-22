@@ -36,6 +36,11 @@ from sglang.lang.choices import (
 # Lazy import some libraries
 from sglang.utils import LazyImport
 from sglang.version import __version__
+# TODO: refine this import to other place (global).
+try:
+    from sgl_kernel_cpu import common_ops
+except ImportError:
+    print("Please install `sgl_kernel_cpu` package to use CPU AMX kernels (to work together with CUDA)")
 
 Anthropic = LazyImport("sglang.lang.backend.anthropic", "Anthropic")
 LiteLLM = LazyImport("sglang.lang.backend.litellm", "LiteLLM")

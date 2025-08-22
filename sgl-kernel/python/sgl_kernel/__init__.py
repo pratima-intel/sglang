@@ -11,6 +11,11 @@ if os.path.exists(cuda_path):
     ctypes.CDLL(cuda_path, mode=ctypes.RTLD_GLOBAL)
 
 from sgl_kernel import common_ops
+try:
+    from sgl_kernel_cpu import common_ops
+except ImportError:
+    print("Please install `sgl_kernel_cpu` package to use CPU AMX kernels (to work together with CUDA)")
+
 from sgl_kernel.allreduce import *
 from sgl_kernel.attention import (
     cutlass_mla_decode,
