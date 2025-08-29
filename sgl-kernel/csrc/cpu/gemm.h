@@ -155,6 +155,8 @@ void fused_experts_int4_w4a16_kernel_impl(
     const uint8_t* __restrict__ w2z,
     const scalar_t* __restrict__ w1s,
     const scalar_t* __restrict__ w2s,
+    const float* __restrict__ w1_bias,
+    const float* __restrict__ w2_bias,
     int group_size,
     const float* __restrict__ topk_weights,
     const int32_t* __restrict__ sorted_ids,
@@ -165,7 +167,12 @@ void fused_experts_int4_w4a16_kernel_impl(
     int64_t K,
     int64_t E,
     int64_t topk,
-    int64_t num_tokens_post_pad);
+    int64_t num_tokens_post_pad,
+    float alpha,
+    float limit,
+    int act_func,
+    bool with_bias,
+    int k_gs);
 
 template <typename scalar_t>
 void shared_expert_fp8_kernel_impl(
@@ -196,6 +203,7 @@ void tinygemm_kernel(
     const scalar_t* __restrict__ Bs,
     scalar_t* __restrict__ Btmp,
     float* __restrict__ Ctmp,
+    const float* __restrict__ bias,
     int64_t M,
     int64_t N,
     int64_t K,

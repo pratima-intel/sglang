@@ -118,7 +118,7 @@ class GptOssSparseMoeBlock(nn.Module):
                     "enable_flashinfer_cutlass_moe"
                 ],
                 # for moe gate_up_proj and down_proj and their bias loading
-                "use_weight_loader_fused": quant_config_name != "mxfp4",
+                "use_weight_loader_fused": quant_config_name not in ["mxfp4", "gptq"],
             }
         self.experts = experts_type(
             num_experts=config.num_local_experts
@@ -240,7 +240,7 @@ class GptOssAttention(nn.Module):
             self.total_num_kv_heads,
             bias=attention_bias,
             params_dtype=params_dtype,
-            quant_config=quant_config,
+            quant_config=None,#quant_config,
             tp_rank=attn_tp_rank,
             tp_size=attn_tp_size,
             prefix=add_prefix("qkv_proj", prefix),
@@ -254,7 +254,7 @@ class GptOssAttention(nn.Module):
             self.total_num_heads * self.head_dim,
             hidden_size,
             bias=attention_bias,
-            quant_config=quant_config,
+            quant_config=None,#quant_config,
             tp_rank=attn_tp_rank,
             tp_size=attn_tp_size,
             reduce_results=False,
@@ -918,6 +918,14 @@ class GptOssForCausalLM(nn.Module):
                     ckpt_down_proj_scale_name="down_proj_scales",
                 )
             )
+        elif self.quant_config is not None and (self.quant_config.get_name() == "gptq"):
+            expert_params_mapping = (
+                get_moe_impl_class().make_expert_params_mapping_fused_gptoss_gptq(
+                    num_experts=self.config.num_local_experts,
+                    ckpt_gate_up_proj_name="gate_up_projs",
+                    ckpt_down_proj_name="down_projs",
+                )
+            )
         else:
             expert_params_mapping = (
                 get_moe_impl_class().make_expert_params_mapping_fused(
@@ -973,28 +981,47 @@ class GptOssForCausalLM(nn.Module):
                 break
             else:
                 for mapping in expert_params_mapping:
-                    param_name, weight_name, shard_id = mapping
-                    if weight_name not in name:
-                        continue
-                    name = name.replace(weight_name, param_name)
-                    if name not in params_dict:
-                        continue
-                    param = params_dict[name]
-                    weight_loader = param.weight_loader
-                    if "bias" not in name:
-                        loaded_weight = loaded_weight.transpose(-2, -1)
-                    if "w2_weight_bias" in name and get_moe_tensor_parallel_rank() != 0:
-                        loaded_weight = loaded_weight.zero_()
+                    if len(mapping) == 3:
+                        param_name, weight_name, shard_id = mapping
+                        if weight_name not in name:
+                            continue
+                        name = name.replace(weight_name, param_name)
+                        if name not in params_dict:
+                            continue
+                        param = params_dict[name]
+                        weight_loader = param.weight_loader
+                        if "bias" not in name:
+                            loaded_weight = loaded_weight.transpose(-2, -1)
+                        if "w2_weight_bias" in name and get_moe_tensor_parallel_rank() != 0:
+                            loaded_weight = loaded_weight.zero_()
 
-                    weight_loader(
-                        param,
-                        loaded_weight,
-                        name,
-                        shard_id=shard_id,
-                    )
-                    params_checker[name] = True
-                    break
+                        weight_loader(
+                            param,
+                            loaded_weight,
+                            name,
+                            shard_id=shard_id,
+                        )
+                        params_checker[name] = True
+                        break
+                    else:
+                        param_name, weight_name, expert_id, shard_id = mapping
+                        if weight_name not in name:
+                            continue
+                        name = name.replace(weight_name, param_name)
+                        param = params_dict[name]
+                        weight_loader = param.weight_loader
+                        weight_loader(
+                            param,
+                            loaded_weight,
+                            name,
+                            shard_id=shard_id,
+                            expert_id=expert_id,
+                        )
+                        params_checker[name] = True
+                        break
                 else:
+                    if "router" in name:
+                        name = name.replace("router.router", "router")
                     if name.endswith(".bias") and name not in params_dict:
                         continue
                     if name not in params_dict:
@@ -1002,7 +1029,13 @@ class GptOssForCausalLM(nn.Module):
                     if name in params_dict.keys():
                         param = params_dict[name]
                         if "sinks" in name:
+                            tp_size = get_tensor_model_parallel_world_size()
+                            full_shard_size = param.numel() * tp_size
                             start = tp_rank * param.numel()
+                            if full_shard_size > loaded_weight.size(0) and start >= loaded_weight.size(0):
+                                pad_size = start + param.numel() - loaded_weight.size(0)
+                                pad_tensor = torch.zeros(pad_size).to(loaded_weight.dtype)
+                                loaded_weight = torch.cat([loaded_weight, pad_tensor], dim=0).to(loaded_weight.dtype)
                             param.data.copy_(
                                 loaded_weight[start : start + param.numel()]
                             )
@@ -1015,7 +1048,7 @@ class GptOssForCausalLM(nn.Module):
                     else:
                         logger.warning(f"Parameter {name} not found in params_dict")
 
-        not_loaded_params = [k for k, v in params_checker.items() if not v]
+        not_loaded_params = [k for k, v in params_checker.items() if not v and not "g_idx" in k]
         if tp_rank == 0:
             if len(not_loaded_params) > 0:
                 raise Exception(f"Not all parameters loaded: {not_loaded_params}")

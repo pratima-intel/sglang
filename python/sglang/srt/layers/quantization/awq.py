@@ -818,6 +818,10 @@ class AWQMoEMethod(FusedMoEMethodBase):
                 None,  # a2_scale
                 layer.w13_compensation if SGLANG_USE_CPU_INT4_W4A8 else None,
                 layer.w2_compensation if SGLANG_USE_CPU_INT4_W4A8 else None,
+                None,  # w1 bias
+                None,  # w3 bias
+                None,  # alpha
+                None,  # limit
                 True,  # is_vnni
             )
 

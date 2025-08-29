@@ -33,6 +33,7 @@ has_triton_kernels = importlib.util.find_spec("triton_kernels") is not None
 _is_cpu_amx_available = cpu_has_amx_support()
 _is_hip = is_hip()
 _is_cpu = is_cpu()
+_moe_torch_native = get_bool_env_var("SGLANG_USE_MOE_TORCH_NATIVE")
 _use_aiter = get_bool_env_var("SGLANG_USE_AITER") and _is_hip
 
 if _use_aiter:
@@ -175,7 +176,7 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, CustomOp):
 
         if self.with_bias:
             w13_weight_bias = torch.nn.Parameter(
-                torch.empty(num_experts, 2 * intermediate_size, dtype=torch.float32),
+                torch.empty(num_experts, 2 * intermediate_size, dtype=params_dtype),
                 requires_grad=False,
             )
             layer.register_parameter("w13_weight_bias", w13_weight_bias)
@@ -197,7 +198,7 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, CustomOp):
 
         if self.with_bias:
             w2_weight_bias = torch.nn.Parameter(
-                torch.empty(num_experts, hidden_size, dtype=torch.float32),
+                torch.ones(num_experts, hidden_size, dtype=params_dtype),
                 requires_grad=False,
             )
             layer.register_parameter("w2_weight_bias", w2_weight_bias)
@@ -217,9 +218,8 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, CustomOp):
             torch.cuda.empty_cache()
 
         # Pack weight for get better performance on CPU
-        if _is_cpu and _is_cpu_amx_available:
+        if not _moe_torch_native and  _is_cpu and _is_cpu_amx_available:
             _amx_process_weight_after_loading(layer, ["w13_weight", "w2_weight"])
-
         return
 
     def apply(
@@ -347,10 +347,11 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, CustomOp):
         inplace: bool = True,
         no_combine: bool = False,
         routed_scaling_factor: Optional[float] = None,
+        activation_alpha: Optional[float] = None,
+        swiglu_limit: Optional[float] = None,
     ) -> torch.Tensor:
-        assert activation == "silu", f"activation = {activation} is not supported."
 
-        if use_intel_amx_backend(layer) and not apply_router_weight_on_input:
+        if not _moe_torch_native and use_intel_amx_backend(layer) and not apply_router_weight_on_input:
             from sglang.srt.layers.moe.topk import apply_topk_weights_cpu
 
             topk_weights, topk_ids, _ = topk_output
@@ -374,11 +375,14 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, CustomOp):
                 None,  # block_size
                 None,  # a1_scale
                 None,  # a2_scale
+                layer.w13_weight_bias,
+                layer.w2_weight_bias,
+                activation_alpha,
+                swiglu_limit,
                 True,  # is_vnni
             )
         else:
             from sglang.srt.layers.moe.fused_moe_native import moe_forward_native
-
             return moe_forward_native(
                 layer,
                 x,
@@ -388,7 +392,10 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, CustomOp):
                 inplace=inplace,
                 no_combine=no_combine,
                 routed_scaling_factor=routed_scaling_factor,
+                activation_alpha=activation_alpha,
+                swiglu_limit=swiglu_limit,
             )
+
 
     def forward_npu(
         self,
