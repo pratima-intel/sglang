@@ -1024,7 +1024,7 @@ at::Tensor fused_experts_cpu(
 
   int64_t M = hidden_states.size(0);
   int64_t K = hidden_states.size(1);
-  int64_t N = use_int4_w4a8? w1.size(1)* w1.size(4) : w1.size(1) / 2;
+  int64_t N = use_int4_w4a8 ? w1.size(1) * w1.size(4) : w1.size(1) / 2;
   int64_t E = w1.size(0);
   int64_t topk = topk_weights_.size(1);
 
@@ -1186,7 +1186,8 @@ at::Tensor fused_experts_cpu(
           num_tokens_post_pad);
     } else if (use_int4_w4a16) {
       scalar_t* __restrict__ A_tmp = intermediate_cache2 + M * topk * K;
-      float* __restrict__ C_tmp = (float*)((void*)(A_tmp + num_threads * BLOCK_M * K));  // Ctmp is ignored?
+      float* __restrict__ C_tmp =
+          (float*)((void*)(A_tmp + num_threads * BLOCK_M * std::max(K, N)));  // Ctmp is ignored?
       scalar_t* __restrict__ intermediate_cache0 = (scalar_t*)((void*)(C_tmp + num_threads * 2 * BLOCK_M * BLOCK_N));
       scalar_t* __restrict__ B_tmp = (scalar_t*)((void*)(intermediate_cache0 + M * topk * 2 * N));
       const int group_size = K / w1_zero.value().size(1);

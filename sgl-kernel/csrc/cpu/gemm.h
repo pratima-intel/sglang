@@ -1,6 +1,7 @@
 #pragma once
 #include <ATen/native/CPUBlas.h>
 #include <c10/util/Unroll.h>
+
 #include "common.h"
 
 // amx-bf16
@@ -166,7 +167,6 @@ void fused_experts_int4_w4a16_kernel_impl(
     int64_t topk,
     int64_t num_tokens_post_pad);
 
-
 template <typename scalar_t>
 void shared_expert_fp8_kernel_impl(
     scalar_t* __restrict__ output,
@@ -270,7 +270,8 @@ void tiny_dequant_gemm_kernel(
     int64_t K,
     int64_t lda,
     int64_t ldc_f,
-    int64_t ldc_s);
+    int64_t ldc_s,
+    bool store_out);
 
 template <typename scalar_t>
 void fused_experts_int4_w4a8_kernel_impl(
