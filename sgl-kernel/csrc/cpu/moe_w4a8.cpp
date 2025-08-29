@@ -435,7 +435,6 @@ void fused_experts_int4_w4a8_kernel_impl(
       // so as to avoid copy A to tmp buffer again
       const uint8_t* __restrict__ A = Aq_tmp + offsets[mb] * IC;
       const float* __restrict__ As = As_tmp + offsets[mb];
-      auto Azp = at::ones({M * topk}).to(at::kInt).mul(128);
       copy_bias<BLOCK_N>(nullptr, C2, m_size, BLOCK_N);
       for (int kci = 0; kci < Kc; ++kci) {
         tiny_dequant_gemm_kernel<scalar_t, BLOCK_N, BLOCK_N / 2>(
