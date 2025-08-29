@@ -1701,6 +1701,7 @@ at::Tensor fused_experts_cpu(
       int64_t block_k = packed_w1.size(3);
       int64_t num_groups = w1_scale.value().size(2);
       const int group_size = K / num_groups;
+      bool with_bias = w1_bias.has_value();
       // TODO: check scales and zeros
       fused_experts_int4_w4a8_kernel_impl<scalar_t>(
           out_hidden_states.data_ptr<scalar_t>(),
@@ -1719,6 +1720,8 @@ at::Tensor fused_experts_cpu(
           w2_zero.value().data_ptr<int8_t>(),
           w1_scale.value().data_ptr<float>(),
           w2_scale.value().data_ptr<float>(),
+          with_bias ? w1_bias.value().data_ptr<float>() : nullptr,
+          with_bias ? w2_bias.value().data_ptr<float>() : nullptr,
           compensation_w1.value().data_ptr<int32_t>(),
           compensation_w2.value().data_ptr<int32_t>(),
           group_size,
@@ -1732,7 +1735,11 @@ at::Tensor fused_experts_cpu(
           E,
           topk,
           num_tokens_post_pad,
-          block_k);
+          block_k,
+          with_bias ? float(alpha.value()) : 0,
+          with_bias ? float(limit.value()) : 0,
+          with_bias ? 2 : 1,
+          with_bias);
     } else {
       scalar_t* __restrict__ A_tmp = intermediate_cache2 + M * topk * K;
       float* __restrict__ C_tmp = (float*)((void*)(A_tmp + num_threads * BLOCK_M * K));

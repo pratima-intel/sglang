@@ -122,6 +122,54 @@ inline void sum_stub(scalar_t* __restrict__ out, const scalar_t* __restrict__ in
   }
 }
 
+template <typename scalar_t>
+inline void clamp_sigmoid_and_mul_stub(
+    scalar_t* __restrict__ out,
+    const scalar_t* __restrict__ input,
+    int64_t size,
+    const float alpha,
+    const float limit) {
+  using bVec = at::vec::Vectorized<scalar_t>;
+  using fVec = at::vec::Vectorized<float>;
+  const fVec one = fVec(1.f);
+  const fVec zero = fVec(0.f);
+  const fVec limit_v = fVec(limit);
+  const fVec nlimit_v = fVec(-limit);
+  const fVec alpha_v = fVec(alpha);
+
+  // no remainder
+#pragma GCC unroll 4
+  for (int64_t d = 0; d < size; d += bVec::size()) {
+    bVec x = bVec::loadu(input + d);
+    fVec x0_, y0_;
+    std::tie(x0_, y0_) = at::vec::convert_to_float(x);
+    float tmp_buffer[fVec::size() * 2];  // 32
+    float tmp_glu[fVec::size()];         // 16
+    float tmp_linear[fVec::size()];      // 16
+    x0_.store(tmp_buffer);
+    y0_.store(tmp_buffer + fVec::size());
+    // interleaved: x[2i] = glu, x[2i+1] = linear
+    for (int j = 0; j < fVec::size(); ++j) {
+      // x0 [0,2,..30]
+      tmp_glu[j] = tmp_buffer[j * 2];
+      // y0 [1,3,...31]
+      tmp_linear[j] = tmp_buffer[j * 2 + 1];
+    }
+    fVec x0 = fVec::loadu(tmp_glu);
+    fVec y0 = fVec::loadu(tmp_linear);
+
+    // clamp
+    x0 = at::vec::minimum(x0, limit_v);
+    y0 = at::vec::minimum(limit_v, at::vec::maximum(nlimit_v, y0));
+    // x * sigmoid(x * alpha)
+    x0 = x0 / (one + (x0 * alpha_v).neg().exp_u20());
+    // (y + 1) * x
+    y0 = y0 + one;
+    x0 = x0 * y0;
+    convert_from_float_and_store<scalar_t>(out + d / 2, x0);
+  }
+}
+
 // out = input + input2 * scale
 template <typename scalar_t>
 inline void add_mul_stub(
@@ -249,6 +297,8 @@ void fused_experts_int4_w4a8_kernel_impl(
     const int8_t* __restrict__ w2z,
     const float* __restrict__ w1s,
     const float* __restrict__ w2s,
+    const float* __restrict__ w1_bias,
+    const float* __restrict__ w2_bias,
     const int32_t* __restrict__ compensation_w1,
     const int32_t* __restrict__ compensation_w2,
     int group_size,
@@ -262,7 +312,11 @@ void fused_experts_int4_w4a8_kernel_impl(
     int64_t E,
     int64_t topk,
     int64_t num_tokens_post_pad,
-    int64_t block_k) {
+    int64_t block_k,
+    float alpha,
+    float limit,
+    int act_func,
+    bool with_bias) {
   constexpr int64_t BLOCK_M = block_size_m();
   constexpr int64_t BLOCK_N = block_size_n();
   int num_threads = at::get_num_threads();
@@ -326,7 +380,9 @@ void fused_experts_int4_w4a8_kernel_impl(
       // Bz and Bs: [E, K/gs, 2N]
       const int8_t* __restrict__ Bz = w1z + expert_id * (num_groups) * (2 * N);
       const float* __restrict__ Bs = w1s + expert_id * (num_groups) * (2 * N);
-
+      const float* __restrict__ B_bias0 = with_bias? w1_bias + expert_id * 2 * N + nb * BLOCK_N :nullptr;
+      const float* __restrict__ B_bias1 = with_bias? w1_bias + expert_id * 2 * N + nb1 * BLOCK_N :nullptr;
+      
       // 1.a load A
       const int32_t* A_ids = sorted_ids + mb * BLOCK_M;
       int64_t m_size = offsets[mb + 1] - offsets[mb];
@@ -338,8 +394,8 @@ void fused_experts_int4_w4a8_kernel_impl(
         As[m] = As_tmp[index];
       }
       const int64_t offset = offsets[mb];
-      copy_bias<BLOCK_N>(nullptr, C0, m_size, BLOCK_N);
-      copy_bias<BLOCK_N>(nullptr, C1, m_size, BLOCK_N);
+      copy_bias<BLOCK_N>(B_bias0, C0, m_size, BLOCK_N);
+      copy_bias<BLOCK_N>(B_bias1, C1, m_size, BLOCK_N);
       for (int kci = 0; kci < Kc; ++kci) {
         tiny_dequant_gemm_kernel<scalar_t, BLOCK_N, BLOCK_N / 2>(
             ic0 + offset * 2 * N + nb * BLOCK_N,
@@ -384,13 +440,22 @@ void fused_experts_int4_w4a8_kernel_impl(
     }
   });
 
-  // stage 1.5: intermediate_cache1 = silu(intermediate_cache0)
-  at::parallel_for(0, M * topk, 0, [&](int64_t begin, int64_t end) {
-    for (int64_t m = begin; m < end; ++m) {
-      silu_and_mul_stub(ic1 + m * N, ic0 + m * 2 * N, ic0 + m * 2 * N + N, N);
-    }
-  });
-
+  if (act_func == 2) {
+    // stage 1.5: intermediate_cache1 = clamp_sigmoid_and_mul(intermediate_cache0)
+    at::parallel_for(0, M * topk, 0, [&](int64_t begin, int64_t end) {
+      for (int64_t m = begin; m < end; ++m) {
+        clamp_sigmoid_and_mul_stub(ic1 + m * N, ic0 + m * 2 * N, N, alpha, limit);
+        clamp_sigmoid_and_mul_stub(ic1 + m * N + N / 2, ic0 + m * 2 * N + N, N, alpha, limit);
+      }
+    });
+  } else {
+    // stage 1.5: intermediate_cache1 = silu(intermediate_cache0)
+    at::parallel_for(0, M * topk, 0, [&](int64_t begin, int64_t end) {
+      for (int64_t m = begin; m < end; ++m) {
+        silu_and_mul_stub(ic1 + m * N, ic0 + m * 2 * N, ic0 + m * 2 * N + N, N);
+      }
+    });
+  }
   // stage 1.5: quantize ic1 to uint8, [M * topk, N]
   at::parallel_for(0, M * topk, 0, [&](int64_t begin, int64_t end) {
     for (int64_t m = begin; m < end; ++m) {
@@ -426,7 +491,7 @@ void fused_experts_int4_w4a8_kernel_impl(
       int32_t expert_id = expert_ids[mb];
       const uint8_t* __restrict__ B = packed_w2 + expert_id * stride_e2;
       const int32_t* __restrict__ B_compensation_w2 = compensation_w2 + expert_id * stride_e2_comp;
-
+      const float* __restrict__ B_bias = with_bias? w2_bias + expert_id * OC + nb * BLOCK_N : nullptr;
       // Bz and Bs: [E, IC/gs, OC]
       const int8_t* __restrict__ Bz = w2z + expert_id * (num_groups)*OC;
       const float* __restrict__ Bs = w2s + expert_id * (num_groups)*OC;
@@ -435,7 +500,7 @@ void fused_experts_int4_w4a8_kernel_impl(
       // so as to avoid copy A to tmp buffer again
       const uint8_t* __restrict__ A = Aq_tmp + offsets[mb] * IC;
       const float* __restrict__ As = As_tmp + offsets[mb];
-      copy_bias<BLOCK_N>(nullptr, C2, m_size, BLOCK_N);
+      copy_bias<BLOCK_N>(B_bias, C2, m_size, BLOCK_N);
       for (int kci = 0; kci < Kc; ++kci) {
         tiny_dequant_gemm_kernel<scalar_t, BLOCK_N, BLOCK_N / 2>(
             nullptr,
@@ -496,6 +561,8 @@ void fused_experts_int4_w4a8_kernel_impl(
       const int8_t* __restrict__ w2z,                      \
       const float* __restrict__ w1s,                       \
       const float* __restrict__ w2s,                       \
+      const float* __restrict__ w1_bias,                    \
+      const float* __restrict__ w2_bias,                    \
       const int32_t* __restrict__ compensation_w1,         \
       const int32_t* __restrict__ compensation_w2,         \
       int group_size,                                      \
@@ -509,7 +576,11 @@ void fused_experts_int4_w4a8_kernel_impl(
       int64_t E,                                           \
       int64_t topk,                                        \
       int64_t num_tokens_post_pad,                         \
-      int64_t block_k)
+      int64_t block_k,                                     \
+      float alpha,                                          \
+      float limit,                                          \
+      int act_func,                                         \
+      bool with_bias)
 
 INSTANTIATE_MOE_INT4_W4A8_TEMPLATE(at::BFloat16);
 INSTANTIATE_MOE_INT4_W4A8_TEMPLATE(at::Half);

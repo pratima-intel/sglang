@@ -368,6 +368,7 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, CustomOp):
                 False,  # use_int8_w8a8
                 False,  # use_fp8_w8a16
                 False,  # use_int4_w4a16
+                False,  # use_int4_w4a8
                 None,  # w1_scale
                 None,  # w2_scale
                 None,  # w1_zp
@@ -375,6 +376,8 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, CustomOp):
                 None,  # block_size
                 None,  # a1_scale
                 None,  # a2_scale
+                None,  # w1 compa
+                None,  # w2 compa
                 layer.w13_weight_bias,
                 layer.w2_weight_bias,
                 activation_alpha,
