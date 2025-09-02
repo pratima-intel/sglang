@@ -164,8 +164,8 @@ def adjust_config_with_unaligned_cpu_tp(
                 // model_config.hf_config.vision_config.num_attention_heads
             )
             from sglang.srt.layers.vocab_parallel_embedding import pad_vocab_size
-
-            pad_size = get_num_heads_padding_size(tp_size, weight_block_size)
+            head_dim = model_config.hf_config.vision_config.head_dim
+            pad_size = get_num_heads_padding_size(tp_size, weight_block_size, head_dim)
             model_config.hf_config.vision_config.num_attention_heads = pad_vocab_size(
                 model_config.hf_config.vision_config.num_attention_heads, pad_size
             )
