@@ -171,6 +171,7 @@ GRAMMAR_TIMEOUT = float(os.environ.get("SGLANG_GRAMMAR_TIMEOUT", 300))
 
 _is_cpu = is_cpu()
 
+
 @dataclass
 class GenerationBatchResult:
     logits_output: Optional[LogitsProcessorOutput]
