@@ -146,13 +146,31 @@ def _amx_process_int4_packed_qweight_after_loading(
         prefix_list = weight_names[0].split("_")
         # MoE layers have prefix
         has_prefix = len(prefix_list) != 1
-        use_w4a8 = SGLANG_USE_CPU_INT4_W4A8 and not has_prefix
+        use_w4a8 = SGLANG_USE_CPU_INT4_W4A8
         if use_w4a8:
-            # TODO: support MoE layers for W4A8 path
-            qweight, qzeros, scales, compensation = pack_f(
-                qweight_tensor.data, qzeros_tensor.data, scales_tensor.data, use_w4a8
-            )
-            compensation = torch.nn.Parameter(compensation, requires_grad=False)
+            if has_prefix:
+                qweight_list = []
+                qzeros_list = []
+                scales_list = []
+                compensation_list = []
+                for i in range(qweight_tensor.data.size(0)):
+                    qweight_i, qzeros_i, scales_i, compensation_i = pack_f(
+                        qweight_tensor.data[i], qzeros_tensor.data[i], scales_tensor.data[i], use_w4a8
+                    )
+                    qweight_list.append(qweight_i)
+                    qzeros_list.append(qzeros_i)
+                    scales_list.append(scales_i)
+                    compensation_list.append(compensation_i)
+                qweight = torch.stack(qweight_list).detach()
+                qzeros = torch.stack(qzeros_list).detach()
+                scales = torch.stack(scales_list).detach()
+                compensation = torch.stack(compensation_list).detach()
+            else:
+                # TODO: support MoE layers for W4A8 path
+                qweight, qzeros, scales, compensation = pack_f(
+                    qweight_tensor.data, qzeros_tensor.data, scales_tensor.data, use_w4a8
+                )
+                compensation = torch.nn.Parameter(compensation, requires_grad=False)
             setattr(
                 module,
                 "compensation" if not has_prefix else prefix_list[0] + "_compensation",

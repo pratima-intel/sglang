@@ -54,6 +54,9 @@ def fused_moe(a, w1, w2, score, topk, renormalize, prepack):
         False,
         False,
         False,
+        False,
+        None,
+        None,
         None,
         None,
         None,
@@ -171,8 +174,11 @@ class TestFusedExperts(CustomTestCase):
             True,
             False,
             False,
+            False,
             w1_s,
             w2_s,
+            None,
+            None,
             None,
             None,
             None,
@@ -215,8 +221,14 @@ class TestFusedExperts(CustomTestCase):
         w2_fp32 = torch.randn(E, K, N)
         w2 = (w2_fp32 * fp8_max).clamp(min=fp8_min, max=fp8_max).to(torch.float8_e4m3fn)
 
-        w1s = torch.randn(E, 2 * N // BLOCK_N, K // BLOCK_K) * factor_for_scale
-        w2s = torch.randn(E, K // BLOCK_N, N // BLOCK_K) * factor_for_scale
+        w1s = (
+            torch.randn(E, math.ceil(2 * N / BLOCK_N), math.ceil(K / BLOCK_K))
+            * factor_for_scale
+        )
+        w2s = (
+            torch.randn(E, math.ceil(K / BLOCK_N), math.ceil(N / BLOCK_K))
+            * factor_for_scale
+        )
 
         w1_scaled = scaled_weight(w1, w1s)
         w2_scaled = scaled_weight(w2, w2s)
@@ -241,11 +253,14 @@ class TestFusedExperts(CustomTestCase):
             False,
             True,
             False,
+            False,
             w1s,
             w2s,
             None,
             None,
             [BLOCK_N, BLOCK_K],
+            None,
+            None,
             None,
             None,
             True,
@@ -271,7 +286,7 @@ class TestFusedExperts(CustomTestCase):
             ):
                 self._fp8_moe(*params)
 
-    def _int4_moe(self, M, N, K, E, topk, group_size=128):
+    def _int4_moe(self, M, N, K, E, topk, use_a8w4, group_size=128):
         dtype = torch.bfloat16
 
         a = torch.rand(M, K, dtype=dtype) / math.sqrt(K)
@@ -309,30 +324,37 @@ class TestFusedExperts(CustomTestCase):
         awq_w13_weight_pack = []
         awq_w13_zero_pack = []
         awq_w13_scales_pack = []
+        awq_w13_comp_pack = []
         awq_w2_weight_pack = []
         awq_w2_zero_pack = []
         awq_w2_scales_pack = []
+        awq_w2_comp_pack = []
         for i in range(E):
-            packed_weight_13_i, packed_zero_13_i, packed_scales_13_i = (
+            packed_weight_13_i, packed_zero_13_i, packed_scales_13_i, compasision_13_i = (
                 autoawq_to_int4pack(
-                    awq_w13_weight[i], awq_w13_zero[i], awq_w13_scales[i], False
+                    awq_w13_weight[i], awq_w13_zero[i], awq_w13_scales[i], use_a8w4
                 )
             )
             awq_w13_weight_pack.append(packed_weight_13_i)
             awq_w13_zero_pack.append(packed_zero_13_i)
             awq_w13_scales_pack.append(packed_scales_13_i)
-            packed_weight_2_i, packed_zero_2_i, packed_scales_2_i = autoawq_to_int4pack(
-                awq_w2_weight[i], awq_w2_zero[i], awq_w2_scales[i], False
+            awq_w13_comp_pack.append(compasision_13_i)
+            packed_weight_2_i, packed_zero_2_i, packed_scales_2_i, compasision_2_i = autoawq_to_int4pack(
+                awq_w2_weight[i], awq_w2_zero[i], awq_w2_scales[i], use_a8w4
             )
             awq_w2_weight_pack.append(packed_weight_2_i)
             awq_w2_zero_pack.append(packed_zero_2_i)
             awq_w2_scales_pack.append(packed_scales_2_i)
+            awq_w2_comp_pack.append(compasision_2_i)
         awq_w13_weight_pack = torch.stack(awq_w13_weight_pack).detach()
         awq_w13_zero_pack = torch.stack(awq_w13_zero_pack).detach()
         awq_w13_scales_pack = torch.stack(awq_w13_scales_pack).detach()
         awq_w2_weight_pack = torch.stack(awq_w2_weight_pack).detach()
         awq_w2_zero_pack = torch.stack(awq_w2_zero_pack).detach()
         awq_w2_scales_pack = torch.stack(awq_w2_scales_pack).detach()
+        awq_w2_comp_pack = torch.stack(awq_w2_comp_pack).detach()
+        awq_w13_comp_pack = torch.stack(awq_w13_comp_pack).detach()
+
         out = kernel.fused_experts_cpu(
             a,
             awq_w13_weight_pack,
@@ -342,7 +364,8 @@ class TestFusedExperts(CustomTestCase):
             False,
             False,
             False,
-            True,
+            not use_a8w4,
+            use_a8w4,
             awq_w13_scales_pack,
             awq_w2_scales_pack,
             awq_w13_zero_pack,
@@ -350,6 +373,8 @@ class TestFusedExperts(CustomTestCase):
             None,
             None,
             None,
+            awq_w13_comp_pack if use_a8w4 else None,
+            awq_w2_comp_pack if use_a8w4 else None,
             True,
         )
 
@@ -363,6 +388,7 @@ class TestFusedExperts(CustomTestCase):
             self.K_int4,
             self.E_int4,
             self.topk_int4,
+            [True, False]
         ):
             with self.subTest(
                 M=params[0],
@@ -370,6 +396,7 @@ class TestFusedExperts(CustomTestCase):
                 K=params[2],
                 E=params[3],
                 topk=params[4],
+                use_a8w4=params[5]
             ):
                 self._int4_moe(*params)
 

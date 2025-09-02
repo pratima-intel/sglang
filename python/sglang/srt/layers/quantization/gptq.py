@@ -1119,7 +1119,8 @@ class GPTQMarlinMoEMethod(FusedMoEMethodBase):
                 False,  # inplace See [Note] inplace should be False in fused_experts.
                 False,  # use_int8_w8a8
                 False,  # use_fp8_w8a16
-                True,  # use_int4_w4a16
+                not SGLANG_USE_CPU_INT4_W4A8,  # use_int4_w4a16
+                SGLANG_USE_CPU_INT4_W4A8,
                 layer.w13_scales,  # w1_scale
                 layer.w2_scales,  # w2_scale
                 layer.w13_qzeros,
@@ -1127,9 +1128,10 @@ class GPTQMarlinMoEMethod(FusedMoEMethodBase):
                 None,  # block_size
                 None,  # a1_scale
                 None,  # a2_scale
+                layer.w13_compensation if SGLANG_USE_CPU_INT4_W4A8 else None,
+                layer.w2_compensation if SGLANG_USE_CPU_INT4_W4A8 else None,
                 True,  # is_vnni
             )
-
         # The input must currently be float16
         orig_dtype = x.dtype
         x = x.half()

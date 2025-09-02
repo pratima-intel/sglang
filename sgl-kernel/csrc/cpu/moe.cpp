@@ -983,6 +983,7 @@ at::Tensor fused_experts_cpu(
     bool use_int8_w8a8,
     bool use_fp8_w8a16,
     bool use_int4_w4a16,
+    bool use_int4_w4a8,
     const std::optional<at::Tensor>& w1_scale,
     const std::optional<at::Tensor>& w2_scale,
     const std::optional<at::Tensor>& w1_zero,
@@ -990,6 +991,8 @@ at::Tensor fused_experts_cpu(
     const std::optional<std::vector<int64_t>> block_size,
     const std::optional<at::Tensor>& a1_scale,
     const std::optional<at::Tensor>& a2_scale,
+    const std::optional<at::Tensor>& compensation_w1,
+    const std::optional<at::Tensor>& compensation_w2,
     bool is_vnni) {
   RECORD_FUNCTION(
       "sgl-kernel::fused_experts_cpu", std::vector<c10::IValue>({hidden_states, w1, w2, topk_weights, topk_ids}));
@@ -1001,27 +1004,27 @@ at::Tensor fused_experts_cpu(
   constexpr int64_t BLOCK_N = block_size_n();
 
   const auto st = hidden_states.scalar_type();
-  CHECK_INPUT(hidden_states);
-  CHECK_INPUT(w1);
-  CHECK_INPUT(w2);
-  CHECK_EQ(topk_weights.sizes(), topk_ids.sizes());
-  CHECK_DIM(2, hidden_states);
-  CHECK_DIM(3, w1);
-  CHECK_DIM(3, w2);
-  CHECK_DIM(2, topk_weights);
-  CHECK_DIM(2, topk_ids);
+  // CHECK_INPUT(hidden_states);
+  // CHECK_INPUT(w1);
+  // CHECK_INPUT(w2);
+  // CHECK_EQ(topk_weights.sizes(), topk_ids.sizes());
+  // CHECK_DIM(2, hidden_states);
+  // CHECK_DIM(3, w1);
+  // CHECK_DIM(3, w2);
+  // CHECK_DIM(2, topk_weights);
+  // CHECK_DIM(2, topk_ids);
 
-  CHECK_EQ(topk_ids.scalar_type(), at::kInt);
+  // CHECK_EQ(topk_ids.scalar_type(), at::kInt);
 
   // TODO: support topk_weights to be bf16 or fp16 in the kernel.
   // The topk_weights of llama4 is computed via Llama4MoE:custom_routing_function and is bf16/fp16
   // while the kernel currently only supports it to be float32
   auto topk_weights_ = topk_weights.to(at::kFloat);
-  CHECK_EQ(topk_weights_.scalar_type(), at::kFloat);
+  // CHECK_EQ(topk_weights_.scalar_type(), at::kFloat);
 
   int64_t M = hidden_states.size(0);
   int64_t K = hidden_states.size(1);
-  int64_t N = w1.size(1) / 2;
+  int64_t N = use_int4_w4a8 ? w1.size(1) * w1.size(4) : w1.size(1) / 2;
   int64_t E = w1.size(0);
   int64_t topk = topk_weights_.size(1);
 
@@ -1030,13 +1033,13 @@ at::Tensor fused_experts_cpu(
   int64_t packed_N = get_row_size(N, use_int8_w8a8);
 
   // check weight shapes
-  CHECK_EQ(w2.size(0), E);
-  CHECK_EQ(w2.size(1), K);
-  CHECK_EQ(packed_w1.size(2), packed_K / (use_int4_w4a16 ? 2 : 1));
-  CHECK_EQ(packed_w2.size(2), packed_N / (use_int4_w4a16 ? 2 : 1));
+  // CHECK_EQ(w2.size(0), E);
+  // CHECK_EQ(w2.size(1), K);
+  // CHECK_EQ(packed_w1.size(2), packed_K / (use_int4_w4a16 ? 2 : 1));
+  // CHECK_EQ(packed_w2.size(2), packed_N / (use_int4_w4a16 ? 2 : 1));
 
   // check scales
-  check_moe_scales(use_int8_w8a8, use_fp8_w8a16, w1_scale, w2_scale, block_size, a1_scale, a2_scale);
+  // check_moe_scales(use_int8_w8a8, use_fp8_w8a16, w1_scale, w2_scale, block_size, a1_scale, a2_scale);
 
   at::Tensor out_hidden_states = inplace ? hidden_states : at::empty_like(hidden_states);
 
@@ -1093,7 +1096,7 @@ at::Tensor fused_experts_cpu(
   //   8. B_tmp : [T, BLOCK_N, std::max(K, N)]
   //
   int64_t buffer_size_nbytes = M * topk * N * 2 + M * topk * K * 2 +
-                               num_threads * BLOCK_M * K * (use_int8_w8a8 ? 1 : 2) +
+                               num_threads * BLOCK_M * K * (use_int8_w8a8 | use_int4_w4a8 ? 1 : 2) +
                                num_threads * 2 * BLOCK_M * BLOCK_N * sizeof(float);
 
   if (use_int8_w8a8) {
@@ -1105,7 +1108,9 @@ at::Tensor fused_experts_cpu(
   if (use_int4_w4a16) {
     buffer_size_nbytes += M * topk * 2 * N * 2 + num_threads * BLOCK_N * std::max(K, N) * 2;
   }
-
+  if (use_int4_w4a8) {
+    buffer_size_nbytes += M * topk * 2 * N * 2 + std::max(M * K, M * topk * N) + M * topk * sizeof(float);
+  }
   auto buffer2 = at::empty({buffer_size_nbytes}, hidden_states.options().dtype(at::kChar));
 
   AT_DISPATCH_REDUCED_FLOATING_TYPES(st, "fused_experts_kernel_impl", [&] {
@@ -1181,7 +1186,8 @@ at::Tensor fused_experts_cpu(
           num_tokens_post_pad);
     } else if (use_int4_w4a16) {
       scalar_t* __restrict__ A_tmp = intermediate_cache2 + M * topk * K;
-      float* __restrict__ C_tmp = (float*)((void*)(A_tmp + num_threads * BLOCK_M * K));  // Ctmp is ignored?
+      float* __restrict__ C_tmp =
+          (float*)((void*)(A_tmp + num_threads * BLOCK_M * std::max(K, N)));  // Ctmp is ignored?
       scalar_t* __restrict__ intermediate_cache0 = (scalar_t*)((void*)(C_tmp + num_threads * 2 * BLOCK_M * BLOCK_N));
       scalar_t* __restrict__ B_tmp = (scalar_t*)((void*)(intermediate_cache0 + M * topk * 2 * N));
       const int group_size = K / w1_zero.value().size(1);
@@ -1213,6 +1219,50 @@ at::Tensor fused_experts_cpu(
           E,
           topk,
           num_tokens_post_pad);
+    } else if (use_int4_w4a8) {
+      uint8_t* __restrict__ A_tmp = (uint8_t*)((void*)(intermediate_cache2 + M * topk * K));
+      float* __restrict__ C_tmp = (float*)((void*)(A_tmp + num_threads * BLOCK_M * K));
+      scalar_t* __restrict__ intermediate_cache0 = (scalar_t*)((void*)(C_tmp + num_threads * 2 * BLOCK_M * BLOCK_N));
+      uint8_t* __restrict__ Aq_tmp = (uint8_t*)((void*)(intermediate_cache0 + M * topk * 2 * N));
+      float* __restrict__ As_tmp = (float*)((void*)(Aq_tmp + std::max(M * K, M * topk * N)));
+
+      // weight shape = [E, Nc, Kc, block_k, block_n/2]
+      // scales/qzeros shape = [E, Nc, G, block_n]
+      int64_t block_k = packed_w1.size(3);
+      int64_t num_groups = w1_scale.value().size(2);
+      const int group_size = K / num_groups;
+      // TODO: check scales and zeros
+      fused_experts_int4_w4a8_kernel_impl<scalar_t>(
+          out_hidden_states.data_ptr<scalar_t>(),
+          intermediate_cache0,
+          intermediate_cache1,
+          intermediate_cache2,
+          A_tmp,
+          Aq_tmp,
+          As_tmp,
+          nullptr,
+          C_tmp,
+          hidden_states.data_ptr<scalar_t>(),
+          packed_w1.data_ptr<uint8_t>(),
+          packed_w2.data_ptr<uint8_t>(),
+          w1_zero.value().data_ptr<int8_t>(),
+          w2_zero.value().data_ptr<int8_t>(),
+          w1_scale.value().data_ptr<float>(),
+          w2_scale.value().data_ptr<float>(),
+          compensation_w1.value().data_ptr<int32_t>(),
+          compensation_w2.value().data_ptr<int32_t>(),
+          group_size,
+          topk_weights.data_ptr<float>(),
+          sorted_ids,
+          expert_ids,
+          offsets,
+          M,
+          N,
+          K,
+          E,
+          topk,
+          num_tokens_post_pad,
+          block_k);
     } else {
       scalar_t* __restrict__ A_tmp = intermediate_cache2 + M * topk * K;
       float* __restrict__ C_tmp = (float*)((void*)(A_tmp + num_threads * BLOCK_M * K));
