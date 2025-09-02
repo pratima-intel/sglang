@@ -517,6 +517,8 @@ class W8A8Int8MoEMethod(FusedMoEMethodBase):
                 None,  # block_size
                 layer.w13_input_scale,  # a1_scale
                 layer.w2_input_scale,  # a2_scale
+                None,  # w1_compa
+                None,  # w2_compa 
                 True,  # is_vnni
             )
 
