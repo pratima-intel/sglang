@@ -269,6 +269,11 @@ def _(input, weight, eps):
     return torch.empty_like(input)
 
 
+@torch.library.register_fake("sgl_kernel::gemma3_rmsnorm_cpu")
+def _(input, weight, eps):
+    return torch.empty_like(input)
+
+
 @torch.library.register_fake("sgl_kernel::l2norm_cpu")
 def _(input, eps):
     return torch.empty_like(input)
@@ -300,6 +305,11 @@ def _(
 
 
 @torch.library.register_fake("sgl_kernel::silu_and_mul_cpu")
+def _(input):
+    return input.new_empty(input.shape[0], input.shape[1] // 2)
+
+
+@torch.library.register_fake("sgl_kernel::gelu_tanh_and_mul_cpu")
 def _(input):
     return input.new_empty(input.shape[0], input.shape[1] // 2)
 
