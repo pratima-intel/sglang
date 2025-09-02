@@ -298,7 +298,7 @@ def autoawq_to_int4pack(
         qweight = qweight.reshape(-1, BIT_COUNT * 2)
         qweight = (qweight[:, BIT_COUNT:] << 4) | qweight[:, :BIT_COUNT]
         qweight = qweight.reshape(*dims, N, K // 2)
-        return qweight, qzeros, scales
+        return qweight, qzeros, scales, torch.ones(1)
 
 
 def awq_reverse_reorder_int_tensor(int_tensor, bits: int):
