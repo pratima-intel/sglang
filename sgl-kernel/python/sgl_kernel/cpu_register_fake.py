@@ -210,6 +210,7 @@ def _(
     use_int8_w8a8,
     use_fp8_w8a16,
     use_int4_w4a16,
+    use_int4_w4a8,
     w1_scale,
     w2_scale,
     w1_zero,
@@ -217,6 +218,8 @@ def _(
     block_size,
     a1_scale,
     a2_scale,
+    compensation_w1,
+    compensation_w2,
     is_vnni,
 ):
     return torch.empty_like(hidden_states)
