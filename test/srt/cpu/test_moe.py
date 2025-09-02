@@ -505,36 +505,47 @@ class TestFusedExperts(CustomTestCase):
         awq_w13_weight_pack = []
         awq_w13_zero_pack = []
         awq_w13_scales_pack = []
+        awq_w13_comp_pack = []
         awq_w2_weight_pack = []
         awq_w2_zero_pack = []
         awq_w2_scales_pack = []
+        awq_w2_comp_pack = []
         for i in range(E):
-            packed_weight_13_i, packed_zero_13_i, packed_scales_13_i = (
+            packed_weight_13_i, packed_zero_13_i, packed_scales_13_i, compasision_13_i = (
                 autoawq_to_int4pack(
-                    awq_w13_weight[i], awq_w13_zero[i], awq_w13_scales[i], False
+                    awq_w13_weight[i], awq_w13_zero[i], awq_w13_scales[i], True
                 )
             )
             awq_w13_weight_pack.append(packed_weight_13_i)
             awq_w13_zero_pack.append(packed_zero_13_i)
             awq_w13_scales_pack.append(packed_scales_13_i)
-            packed_weight_2_i, packed_zero_2_i, packed_scales_2_i = autoawq_to_int4pack(
-                awq_w2_weight[i], awq_w2_zero[i], awq_w2_scales[i], False
+            awq_w13_comp_pack.append(compasision_13_i)
+            packed_weight_2_i, packed_zero_2_i, packed_scales_2_i, compasision_2_i = autoawq_to_int4pack(
+                awq_w2_weight[i], awq_w2_zero[i], awq_w2_scales[i], True
             )
             awq_w2_weight_pack.append(packed_weight_2_i)
             awq_w2_zero_pack.append(packed_zero_2_i)
             awq_w2_scales_pack.append(packed_scales_2_i)
+            awq_w2_comp_pack.append(compasision_2_i)
         awq_w13_weight_pack = torch.stack(awq_w13_weight_pack).detach()
         awq_w13_zero_pack = torch.stack(awq_w13_zero_pack).detach()
         awq_w13_scales_pack = torch.stack(awq_w13_scales_pack).detach()
         awq_w2_weight_pack = torch.stack(awq_w2_weight_pack).detach()
         awq_w2_zero_pack = torch.stack(awq_w2_zero_pack).detach()
         awq_w2_scales_pack = torch.stack(awq_w2_scales_pack).detach()
+        awq_w2_comp_pack = torch.stack(awq_w2_comp_pack).detach()
+        awq_w13_comp_pack = torch.stack(awq_w13_comp_pack).detach()
+        print(awq_w13_weight_pack.shape)
+        print(awq_w13_zero_pack.shape)
+        print(awq_w13_comp_pack.shape)
+        print(awq_w2_weight_pack.shape)
         out = kernel.fused_experts_cpu(
             a,
             awq_w13_weight_pack,
             awq_w2_weight_pack,
             topk_weight.to(torch.float),
             topk_ids.to(torch.int32),
+            False,
             False,
             False,
             False,
@@ -546,6 +557,8 @@ class TestFusedExperts(CustomTestCase):
             None,
             None,
             None,
+            awq_w13_comp_pack,
+            awq_w2_comp_pack,
             w1_b,
             w2_b,
             alpha,
