@@ -155,6 +155,7 @@ def _(
     seq_lens,
     sm_scale,
     logit_cap,
+    is_cross_attn,
     encoder_lens,
 ) -> None:
     return
@@ -176,6 +177,7 @@ def _(
     max_len_extend,
     sm_scale,
     logit_cap,
+    is_cross_attn,
     encoder_lens,
 ) -> None:
     return

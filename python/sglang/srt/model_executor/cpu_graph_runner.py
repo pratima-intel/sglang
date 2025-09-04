@@ -129,10 +129,6 @@ class CPUGraphRunner(GraphRunner):
         assert (
             model_runner.spec_algorithm == SpeculativeAlgorithm.NONE
         ), "CPUGraphRunner does not support speculative inference yet."
-        # TODO add compile support for encoder-decoder models
-        assert (
-            not self.is_encoder_decoder
-        ), "CPUGraphRunner does not support encoder-decoder models yet."
         assert self.dp_size == 1, "CPUGraphRunner does not support DP yet."
         assert self.pp_size == 1, "CPUGraphRunner does not support PP yet."
 
@@ -143,6 +139,7 @@ class CPUGraphRunner(GraphRunner):
         self.max_bs = max(self.capture_bs)
         self.max_num_token = self.max_bs * self.num_tokens_per_bs
 
+        self.encoder_len_fill_value = 0
         self.seq_len_fill_value = (
             self.model_runner.attn_backend.get_graph_seq_len_fill_value()
         )
@@ -169,6 +166,12 @@ class CPUGraphRunner(GraphRunner):
                 dtype=torch.bool,
                 device=self.device,
             )
+            if self.is_encoder_decoder:
+                self.encoder_lens = torch.full(
+                    (self.max_bs,), self.encoder_len_fill_value, dtype=torch.int64
+                )
+            else:
+                self.encoder_lens = None
 
         # Capture
         try:
@@ -245,6 +248,10 @@ class CPUGraphRunner(GraphRunner):
         positions = self.positions[:num_tokens]
         mrope_positions = self.mrope_positions[:, :bs]
         self.num_token_non_padded[...] = num_tokens
+        if self.is_encoder_decoder:
+            encoder_lens = self.encoder_lens[:bs]
+        else:
+            encoder_lens = None
 
         gathered_buffer = None
 
@@ -265,6 +272,8 @@ class CPUGraphRunner(GraphRunner):
             attn_backend=self.model_runner.attn_backend,
             out_cache_loc=out_cache_loc,
             seq_lens_sum=seq_lens.sum().item(),
+            encoder_lens=encoder_lens,
+            encoder_lens_cpu=encoder_lens,
             return_logprob=False,
             positions=positions,
             gathered_buffer=gathered_buffer,
@@ -333,6 +342,8 @@ class CPUGraphRunner(GraphRunner):
                 dim = pp_proxy_tensors[key].shape[0]
                 self.pp_proxy_tensors[key][:dim].copy_(pp_proxy_tensors[key])
 
+        if self.is_encoder_decoder:
+            self.encoder_lens[:raw_bs].copy_(forward_batch.encoder_lens)
         if forward_batch.mrope_positions is not None:
             self.mrope_positions[:, :raw_bs].copy_(forward_batch.mrope_positions)
         if enable_num_token_non_padded(self.model_runner.server_args):

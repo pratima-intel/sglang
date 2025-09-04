@@ -37,8 +37,9 @@ from sglang.srt.managers.schedule_batch import MultimodalInputs
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.model_loader.weight_utils import default_weight_loader
 from sglang.srt.models.llama import LlamaDecoderLayer, LlamaMLP
-from sglang.srt.utils import add_prefix
+from sglang.srt.utils import add_prefix, is_cpu
 
+_is_cpu = is_cpu()
 
 class ColumnParallelConv2dPatch(torch.nn.Module):
     """Conv2D Patching layer with model parallelism.
@@ -580,6 +581,7 @@ class MllamaTextCrossAttention(nn.Module):
         q = self.q_norm(q)
 
         output = self.attn(q, k, v, forward_batch)
+        output = output.view(-1, self.num_local_heads * self.head_dim)
         out, _ = self.o_proj(output)
         return out
 
@@ -976,7 +978,7 @@ class MllamaForConditionalGeneration(nn.Module):
         cross_attention_mask = None
         cross_attention_states = None
 
-        if get_is_capture_mode():
+        if get_is_capture_mode() or _is_cpu:
             # NOTE: when doing cuda graph capture, we do not want to skip cross attention
             # Make is a constant value to avoid cuda graph capture issue
             skip_cross_attention = False

@@ -880,21 +880,7 @@ def sample_mmmu_requests(
                 prompt = f"Question: {question}\n\nAnswer: "
                 if apply_chat_template:
                     try:
-                        if "llama" in tokenizer.name_or_path.lower() or "gemma" in tokenizer.name_or_path.lower():
-                            prompt = tokenizer.apply_chat_template(
-                                [
-                                    {
-                                        "role": "user",
-                                        "content": [
-                                            {"type": "image", "image": image_data},
-                                            {"type": "text", "text": prompt},
-                                        ],
-                                    }
-                                ],
-                                add_generation_prompt=True,
-                                tokenize=False,
-                            )
-                        elif "phi-4-multimodal" in tokenizer.name_or_path.lower():
+                        if "phi-4-multimodal" in tokenizer.name_or_path.lower():
                             prompt = tokenizer.apply_chat_template(
                                 [
                                     {
@@ -906,15 +892,19 @@ def sample_mmmu_requests(
                                 tokenize=False,
                             )
                         else:
+                            if "llama" in tokenizer.name_or_path.lower() or "gemma" in tokenizer.name_or_path.lower():
+                                image_field = {"type": "image", "image": image_data}
+                            else:
+                                image_field = {
+                                    "type": "image_url",
+                                    "image_url": {"url": image_data},
+                                }
                             prompt = tokenizer.apply_chat_template(
                                 [
                                     {
                                         "role": "user",
                                         "content": [
-                                            {
-                                                "type": "image_url",
-                                                "image_url": {"url": image_data},
-                                            },
+                                            image_field,
                                             {"type": "text", "text": prompt},
                                         ],
                                     }
