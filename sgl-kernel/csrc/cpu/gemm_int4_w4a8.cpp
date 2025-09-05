@@ -441,14 +441,13 @@ void _da8w4_linear_impl(
     TORCH_CHECK(input_scales.sizes() == input_qzeros.sizes(), "DA8W4: unexpected input qzeros shape");
   }
 
-  // weight + compensation shape = [Nc, Kc, BLOCK_N * block_k / 2 + BLOCK_N*sizeof(int32_t)]
+  // weight + compensation shape = [Nc, Kc, BLOCK_N * BLOCK_K / 2 + BLOCK_N*sizeof(int32_t)]
   // scales/qzeros shape = [Nc, G, BLOCK_N]
 
   int64_t Nc = weight.size(0);
   int64_t Kc = weight.size(1);
-  int64_t block_k = BLOCK_K;
   int64_t N = Nc * BLOCK_N;
-  TORCH_CHECK(K == Kc * block_k, "DA8W4: weight and input shapes mismatch");
+  TORCH_CHECK(K == Kc * BLOCK_K, "DA8W4: weight and input shapes mismatch");
   int64_t block_m = [&]() -> long {
     if (M <= 48) {
       return M;
@@ -467,8 +466,8 @@ void _da8w4_linear_impl(
   // scales/qzeros shape = [Nc, G, BLOCK_N]
   int64_t num_groups = weight_scales.size(1);
   int64_t group_size = K / num_groups;
-  TORCH_CHECK(group_size % block_k == 0, "DA8W4 CPU: group_size should be divisible by block_k");
-  int64_t block_per_group = group_size / block_k;
+  TORCH_CHECK(group_size % BLOCK_K == 0, "DA8W4 CPU: group_size should be divisible by BLOCK_K");
+  int64_t block_per_group = group_size / BLOCK_K;
 
   using Tin = typename ActDtype<sym_quant_a>::type;
   const Tin* a_ptr = input_view.data_ptr<Tin>();
@@ -495,19 +494,19 @@ void _da8w4_linear_impl(
         for (int kci = 0; kci < Kc; ++kci) {
           int32_t* compensation_ptr =
               sym_quant_a ? nullptr
-                          : (int32_t*)(void*)(b_ptr + (nc * Kc + kci) * (BLOCK_N * (block_k / 2 + sizeof(int32_t))) +
-                                              block_k * BLOCK_N / 2) /*Bcomp*/;
+                          : (int32_t*)(void*)(b_ptr + (nc * Kc + kci) * (BLOCK_N * (BLOCK_K / 2 + sizeof(int32_t))) +
+                                              BLOCK_K * BLOCK_N / 2) /*Bcomp*/;
           _dequant_gemm_accum<cpublas_can_pack, BLOCK_N, BLOCK_N / 2, sym_quant_a>(
               y_buf[0] /*C*/,
-              (uint8_t*)a_ptr + mci * block_m * K + kci * block_k /*A*/,
+              (uint8_t*)a_ptr + mci * block_m * K + kci * BLOCK_K /*A*/,
               a_scales_ptr + mci * block_m /*scales_a*/,
               a_qzeros_ptr + mci * block_m /*qzeros_a*/,
-              b_ptr + (nc * Kc + kci) * (BLOCK_N * (block_k / 2 + sizeof(int32_t))),
+              b_ptr + (nc * Kc + kci) * (BLOCK_N * (BLOCK_K / 2 + sizeof(int32_t))),
               b_scales_ptr + nc * BLOCK_N * num_groups + kci / block_per_group * BLOCK_N /*scales_b*/,
               b_qzeros_ptr + nc * BLOCK_N * num_groups + kci / block_per_group * BLOCK_N /*qzeros_b*/,
               compensation_ptr /*Bcomp*/,
               m_size /*M*/,
-              block_k /*K*/,
+              BLOCK_K /*K*/,
               K /*lda*/,
               BLOCK_N /*ldc*/);
         }
@@ -588,7 +587,7 @@ inline void copy_stub2(scalar_t* __restrict__ out, const float* __restrict__ inp
 }
 
 template <typename scalar_t, int64_t N, int64_t ldb>
-void tiny_dequant_gemm_kernel(
+void tinygemm_kernel(
     scalar_t* C,
     float* C_temp,
     const uint8_t* A,
@@ -614,23 +613,23 @@ void tiny_dequant_gemm_kernel(
   }
 }
 
-#define INSTANTIATE_TINY_DEQUANT_GEMM_TEMPLATE(TYPE, N_VAL, LDB_VAL) \
-  template void tiny_dequant_gemm_kernel<TYPE, N_VAL, LDB_VAL>(      \
-      TYPE * C,                                                      \
-      float* C_temp,                                                 \
-      const uint8_t* A,                                              \
-      const float* scales_a,                                         \
-      const int32_t* qzeros_a,                                       \
-      const uint8_t* B,                                              \
-      const float* scales_b,                                         \
-      const int8_t* qzeros_b,                                        \
-      const int32_t* compensation,                                   \
-      int64_t M,                                                     \
-      int64_t K,                                                     \
-      int64_t lda,                                                   \
-      int64_t ldc_f,                                                 \
-      int64_t ldc_s,                                                 \
+#define INSTANTIATE_TINYGEMM_TEMPLATE(TYPE, N_VAL, LDB_VAL) \
+  template void tinygemm_kernel<TYPE, N_VAL, LDB_VAL>(      \
+      TYPE * C,                                             \
+      float* C_temp,                                        \
+      const uint8_t* A,                                     \
+      const float* scales_a,                                \
+      const int32_t* qzeros_a,                              \
+      const uint8_t* B,                                     \
+      const float* scales_b,                                \
+      const int8_t* qzeros_b,                               \
+      const int32_t* compensation,                          \
+      int64_t M,                                            \
+      int64_t K,                                            \
+      int64_t lda,                                          \
+      int64_t ldc_f,                                        \
+      int64_t ldc_s,                                        \
       bool store_out)
 
-INSTANTIATE_TINY_DEQUANT_GEMM_TEMPLATE(at::BFloat16, BLOCK_N, BLOCK_N / 2);
-INSTANTIATE_TINY_DEQUANT_GEMM_TEMPLATE(at::Half, BLOCK_N, BLOCK_N / 2);
+INSTANTIATE_TINYGEMM_TEMPLATE(at::BFloat16, BLOCK_N, BLOCK_N / 2);
+INSTANTIATE_TINYGEMM_TEMPLATE(at::Half, BLOCK_N, BLOCK_N / 2);

@@ -1236,8 +1236,7 @@ at::Tensor fused_experts_cpu(
           K,
           E,
           topk,
-          num_tokens_post_pad,
-          BLOCK_K);
+          num_tokens_post_pad);
     } else {
       scalar_t* __restrict__ A_tmp = intermediate_cache2 + M * topk * K;
       float* __restrict__ C_tmp = (float*)((void*)(A_tmp + num_threads * BLOCK_M * K));

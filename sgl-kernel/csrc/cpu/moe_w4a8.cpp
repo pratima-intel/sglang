@@ -259,8 +259,7 @@ void fused_experts_int4_w4a8_kernel_impl(
     int64_t K,
     int64_t E,
     int64_t topk,
-    int64_t num_tokens_post_pad,
-    int64_t block_k) {
+    int64_t num_tokens_post_pad) {
   constexpr int64_t BLOCK_M = block_size_m();
   constexpr int64_t BLOCK_N = block_size_n();
   int num_threads = at::get_num_threads();
@@ -292,13 +291,13 @@ void fused_experts_int4_w4a8_kernel_impl(
   const int64_t MB = div_up(num_tokens_post_pad, BLOCK_M);
   const int64_t NB = div_up(N, BLOCK_N);
 
-  int64_t block_per_group = group_size / block_k;
-  int64_t Kc = K / block_k;
+  int64_t block_per_group = group_size / BLOCK_K;
+  int64_t Kc = K / BLOCK_K;
   int64_t num_groups = K / group_size;
 
-  const int64_t stride_e = 2 * NB * Kc * (BLOCK_N * (block_k / 2 + sizeof(int32_t)));
+  const int64_t stride_e = 2 * NB * Kc * (BLOCK_N * (BLOCK_K / 2 + sizeof(int32_t)));
   const bool sym_quant_a = false;
-  // weight + compensation shape = [E, Nc, Kc, block_n * block_k / 2 + block_n*sizeof(int32_t)]
+  // weight + compensation shape = [E, Nc, Kc, block_n * BLOCK_K / 2 + block_n*sizeof(int32_t)]
   // scales/qzeros shape = [E, Nc, G, block_n]
 
   // here we only parallel on half of 2N to fuse silu_and_mul with gemm
@@ -338,20 +337,20 @@ void fused_experts_int4_w4a8_kernel_impl(
       for (int kci = 0; kci < Kc; ++kci) {
         int32_t* compensation_ptr =
             sym_quant_a ? nullptr
-                        : (int32_t*)(void*)(B + (nb * Kc + kci) * (BLOCK_N * (block_k / 2 + sizeof(int32_t))) +
-                                            block_k * BLOCK_N / 2) /*Bcomp*/;
-        tiny_dequant_gemm_kernel<scalar_t, BLOCK_N, BLOCK_N / 2>(
+                        : (int32_t*)(void*)(B + (nb * Kc + kci) * (BLOCK_N * (BLOCK_K / 2 + sizeof(int32_t))) +
+                                            BLOCK_K * BLOCK_N / 2) /*Bcomp*/;
+        tinygemm_kernel<scalar_t, BLOCK_N, BLOCK_N / 2>(
             ic0 + offset * 2 * N + nb * BLOCK_N,
             C0,
-            A + kci * block_k,
+            A + kci * BLOCK_K,
             As,
             Azp_ptr,
-            B + (nb * Kc + kci) * (BLOCK_N * (block_k / 2 + sizeof(int32_t))) /*B*/,
+            B + (nb * Kc + kci) * (BLOCK_N * (BLOCK_K / 2 + sizeof(int32_t))) /*B*/,
             Bs + nb * BLOCK_N * num_groups + kci / block_per_group * BLOCK_N /*scales_b*/,
             Bz + nb * BLOCK_N * num_groups + kci / block_per_group * BLOCK_N /*qzeros_b*/,
             compensation_ptr,
             m_size,
-            block_k,
+            BLOCK_K,
             K,
             BLOCK_N,
             2 * N,
@@ -361,20 +360,20 @@ void fused_experts_int4_w4a8_kernel_impl(
       for (int kci = 0; kci < Kc; ++kci) {
         int32_t* compensation_ptr =
             sym_quant_a ? nullptr
-                        : (int32_t*)(void*)(B + (nb1 * Kc + kci) * (BLOCK_N * (block_k / 2 + sizeof(int32_t))) +
-                                            block_k * BLOCK_N / 2) /*Bcomp*/;
-        tiny_dequant_gemm_kernel<scalar_t, BLOCK_N, BLOCK_N / 2>(
+                        : (int32_t*)(void*)(B + (nb1 * Kc + kci) * (BLOCK_N * (BLOCK_K / 2 + sizeof(int32_t))) +
+                                            BLOCK_K * BLOCK_N / 2) /*Bcomp*/;
+        tinygemm_kernel<scalar_t, BLOCK_N, BLOCK_N / 2>(
             ic0 + offset * 2 * N + nb1 * BLOCK_N,
             C1,
-            A + kci * block_k,
+            A + kci * BLOCK_K,
             As,
             Azp_ptr,
-            B + (nb1 * Kc + kci) * (BLOCK_N * (block_k / 2 + sizeof(int32_t))) /*B*/,
+            B + (nb1 * Kc + kci) * (BLOCK_N * (BLOCK_K / 2 + sizeof(int32_t))) /*B*/,
             Bs + nb1 * BLOCK_N * num_groups + kci / block_per_group * BLOCK_N /*scales_b*/,
             Bz + nb1 * BLOCK_N * num_groups + kci / block_per_group * BLOCK_N /*qzeros_b*/,
             compensation_ptr,
             m_size,
-            block_k,
+            BLOCK_K,
             K,
             BLOCK_N,
             2 * N,
@@ -408,8 +407,8 @@ void fused_experts_int4_w4a8_kernel_impl(
   const int64_t NB2 = div_up(OC, BLOCK_N);
   const int64_t stride_oc = IC;
   num_groups = IC / group_size;
-  Kc = IC / block_k;
-  const int64_t stride_e2 = NB2 * Kc * (BLOCK_N * (block_k / 2 + sizeof(int32_t)));
+  Kc = IC / BLOCK_K;
+  const int64_t stride_e2 = NB2 * Kc * (BLOCK_N * (BLOCK_K / 2 + sizeof(int32_t)));
   // parallel on [MB2, NB2]
   at::parallel_for(0, MB2 * NB2, 0, [&](int64_t begin, int64_t end) {
     int tid = at::get_thread_num();
@@ -440,20 +439,20 @@ void fused_experts_int4_w4a8_kernel_impl(
       for (int kci = 0; kci < Kc; ++kci) {
         int32_t* compensation_ptr =
             sym_quant_a ? nullptr
-                        : (int32_t*)(void*)(B + (nb * Kc + kci) * (BLOCK_N * (block_k / 2 + sizeof(int32_t))) +
-                                            block_k * BLOCK_N / 2) /*Bcomp*/;
-        tiny_dequant_gemm_kernel<scalar_t, BLOCK_N, BLOCK_N / 2>(
+                        : (int32_t*)(void*)(B + (nb * Kc + kci) * (BLOCK_N * (BLOCK_K / 2 + sizeof(int32_t))) +
+                                            BLOCK_K * BLOCK_N / 2) /*Bcomp*/;
+        tinygemm_kernel<scalar_t, BLOCK_N, BLOCK_N / 2>(
             nullptr,
             C2,
-            A + kci * block_k,
+            A + kci * BLOCK_K,
             As,
             Azp_ptr,
-            B + (nb * Kc + kci) * (BLOCK_N * (block_k / 2 + sizeof(int32_t))),
+            B + (nb * Kc + kci) * (BLOCK_N * (BLOCK_K / 2 + sizeof(int32_t))),
             Bs + nb * BLOCK_N * num_groups + kci / block_per_group * BLOCK_N /*scales_b*/,
             Bz + nb * BLOCK_N * num_groups + kci / block_per_group * BLOCK_N /*zeros_b*/,
             compensation_ptr,
             m_size,
-            block_k,
+            BLOCK_K,
             IC,
             BLOCK_N,
             BLOCK_N,
@@ -511,8 +510,7 @@ void fused_experts_int4_w4a8_kernel_impl(
       int64_t K,                                           \
       int64_t E,                                           \
       int64_t topk,                                        \
-      int64_t num_tokens_post_pad,                         \
-      int64_t block_k)
+      int64_t num_tokens_post_pad)
 
 INSTANTIATE_MOE_INT4_W4A8_TEMPLATE(at::BFloat16);
 INSTANTIATE_MOE_INT4_W4A8_TEMPLATE(at::Half);
