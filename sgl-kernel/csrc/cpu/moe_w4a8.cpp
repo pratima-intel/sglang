@@ -249,8 +249,6 @@ void fused_experts_int4_w4a8_kernel_impl(
     const int8_t* __restrict__ w2z,
     const float* __restrict__ w1s,
     const float* __restrict__ w2s,
-    const int32_t* __restrict__ compensation_w1,
-    const int32_t* __restrict__ compensation_w2,
     int group_size,
     const float* __restrict__ topk_weights,
     const int32_t* __restrict__ sorted_ids,
@@ -298,12 +296,10 @@ void fused_experts_int4_w4a8_kernel_impl(
   int64_t Kc = K / block_k;
   int64_t num_groups = K / group_size;
 
-  const int64_t stride_e = 2 * N * K / 2;
-  const int64_t stride_e_comp = 2 * N * Kc;
-
-  // weight shape = [Nc, Kc, block_k, BLOCK_N/2]
-  // scales/qzeros shape = [Nc, G, BLOCK_N]
-  // compensation shape = [Nc, Kc, BLOCK_N]
+  const int64_t stride_e = 2 * NB * Kc * (BLOCK_N * (block_k / 2 + sizeof(int32_t)));
+  const bool sym_quant_a = false;
+  // weight + compensation shape = [E, Nc, Kc, block_n * block_k / 2 + block_n*sizeof(int32_t)]
+  // scales/qzeros shape = [E, Nc, G, block_n]
 
   // here we only parallel on half of 2N to fuse silu_and_mul with gemm
   at::parallel_for(0, MB * NB, 0, [&](int64_t begin, int64_t end) {
@@ -322,7 +318,6 @@ void fused_experts_int4_w4a8_kernel_impl(
       // B shape [K, n_size] in vnni format
       int32_t expert_id = expert_ids[mb];
       const uint8_t* __restrict__ B = packed_w1 + expert_id * stride_e;
-      const int32_t* __restrict__ B_compensation_w1 = compensation_w1 + expert_id * stride_e_comp;
       // Bz and Bs: [E, K/gs, 2N]
       const int8_t* __restrict__ Bz = w1z + expert_id * (num_groups) * (2 * N);
       const float* __restrict__ Bs = w1s + expert_id * (num_groups) * (2 * N);
@@ -341,16 +336,20 @@ void fused_experts_int4_w4a8_kernel_impl(
       copy_bias<BLOCK_N>(nullptr, C0, m_size, BLOCK_N);
       copy_bias<BLOCK_N>(nullptr, C1, m_size, BLOCK_N);
       for (int kci = 0; kci < Kc; ++kci) {
+        int32_t* compensation_ptr =
+            sym_quant_a ? nullptr
+                        : (int32_t*)(void*)(B + (nb * Kc + kci) * (BLOCK_N * (block_k / 2 + sizeof(int32_t))) +
+                                            block_k * BLOCK_N / 2) /*Bcomp*/;
         tiny_dequant_gemm_kernel<scalar_t, BLOCK_N, BLOCK_N / 2>(
             ic0 + offset * 2 * N + nb * BLOCK_N,
             C0,
             A + kci * block_k,
             As,
             Azp_ptr,
-            B + (nb * Kc + kci) * BLOCK_N * block_k / 2 /*B*/,
+            B + (nb * Kc + kci) * (BLOCK_N * (block_k / 2 + sizeof(int32_t))) /*B*/,
             Bs + nb * BLOCK_N * num_groups + kci / block_per_group * BLOCK_N /*scales_b*/,
             Bz + nb * BLOCK_N * num_groups + kci / block_per_group * BLOCK_N /*qzeros_b*/,
-            B_compensation_w1 + +nb * BLOCK_N * Kc + kci * BLOCK_N,
+            compensation_ptr,
             m_size,
             block_k,
             K,
@@ -360,16 +359,20 @@ void fused_experts_int4_w4a8_kernel_impl(
       }
 
       for (int kci = 0; kci < Kc; ++kci) {
+        int32_t* compensation_ptr =
+            sym_quant_a ? nullptr
+                        : (int32_t*)(void*)(B + (nb1 * Kc + kci) * (BLOCK_N * (block_k / 2 + sizeof(int32_t))) +
+                                            block_k * BLOCK_N / 2) /*Bcomp*/;
         tiny_dequant_gemm_kernel<scalar_t, BLOCK_N, BLOCK_N / 2>(
             ic0 + offset * 2 * N + nb1 * BLOCK_N,
             C1,
             A + kci * block_k,
             As,
             Azp_ptr,
-            B + (nb1 * Kc + kci) * BLOCK_N * block_k / 2 /*B*/,
+            B + (nb1 * Kc + kci) * (BLOCK_N * (block_k / 2 + sizeof(int32_t))) /*B*/,
             Bs + nb1 * BLOCK_N * num_groups + kci / block_per_group * BLOCK_N /*scales_b*/,
             Bz + nb1 * BLOCK_N * num_groups + kci / block_per_group * BLOCK_N /*qzeros_b*/,
-            B_compensation_w1 + nb1 * BLOCK_N * Kc + kci * BLOCK_N,
+            compensation_ptr,
             m_size,
             block_k,
             K,
@@ -406,8 +409,7 @@ void fused_experts_int4_w4a8_kernel_impl(
   const int64_t stride_oc = IC;
   num_groups = IC / group_size;
   Kc = IC / block_k;
-  const int64_t stride_e2 = OC * IC / 2;
-  const int64_t stride_e2_comp = OC * Kc;
+  const int64_t stride_e2 = NB2 * Kc * (BLOCK_N * (block_k / 2 + sizeof(int32_t)));
   // parallel on [MB2, NB2]
   at::parallel_for(0, MB2 * NB2, 0, [&](int64_t begin, int64_t end) {
     int tid = at::get_thread_num();
@@ -425,7 +427,6 @@ void fused_experts_int4_w4a8_kernel_impl(
       // B shape [IC, n_size] in vnni format
       int32_t expert_id = expert_ids[mb];
       const uint8_t* __restrict__ B = packed_w2 + expert_id * stride_e2;
-      const int32_t* __restrict__ B_compensation_w2 = compensation_w2 + expert_id * stride_e2_comp;
 
       // Bz and Bs: [E, IC/gs, OC]
       const int8_t* __restrict__ Bz = w2z + expert_id * (num_groups)*OC;
@@ -437,16 +438,20 @@ void fused_experts_int4_w4a8_kernel_impl(
       const float* __restrict__ As = As_tmp + offsets[mb];
       copy_bias<BLOCK_N>(nullptr, C2, m_size, BLOCK_N);
       for (int kci = 0; kci < Kc; ++kci) {
+        int32_t* compensation_ptr =
+            sym_quant_a ? nullptr
+                        : (int32_t*)(void*)(B + (nb * Kc + kci) * (BLOCK_N * (block_k / 2 + sizeof(int32_t))) +
+                                            block_k * BLOCK_N / 2) /*Bcomp*/;
         tiny_dequant_gemm_kernel<scalar_t, BLOCK_N, BLOCK_N / 2>(
             nullptr,
             C2,
             A + kci * block_k,
             As,
             Azp_ptr,
-            B + (nb * Kc + kci) * BLOCK_N * block_k / 2,
+            B + (nb * Kc + kci) * (BLOCK_N * (block_k / 2 + sizeof(int32_t))),
             Bs + nb * BLOCK_N * num_groups + kci / block_per_group * BLOCK_N /*scales_b*/,
             Bz + nb * BLOCK_N * num_groups + kci / block_per_group * BLOCK_N /*zeros_b*/,
-            B_compensation_w2 + nb * BLOCK_N * Kc + kci * BLOCK_N,
+            compensation_ptr,
             m_size,
             block_k,
             IC,
@@ -496,8 +501,6 @@ void fused_experts_int4_w4a8_kernel_impl(
       const int8_t* __restrict__ w2z,                      \
       const float* __restrict__ w1s,                       \
       const float* __restrict__ w2s,                       \
-      const int32_t* __restrict__ compensation_w1,         \
-      const int32_t* __restrict__ compensation_w2,         \
       int group_size,                                      \
       const float* __restrict__ topk_weights,              \
       const int32_t* __restrict__ sorted_ids,              \

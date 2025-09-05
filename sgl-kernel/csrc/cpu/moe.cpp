@@ -958,8 +958,6 @@ at::Tensor fused_experts_cpu(
     const std::optional<std::vector<int64_t>> block_size,
     const std::optional<at::Tensor>& a1_scale,
     const std::optional<at::Tensor>& a2_scale,
-    const std::optional<at::Tensor>& compensation_w1,
-    const std::optional<at::Tensor>& compensation_w2,
     bool is_vnni) {
   RECORD_FUNCTION(
       "sgl-kernel::fused_experts_cpu", std::vector<c10::IValue>({hidden_states, w1, w2, topk_weights, topk_ids}));
@@ -976,10 +974,10 @@ at::Tensor fused_experts_cpu(
   CHECK_INPUT(w2);
   CHECK_EQ(topk_weights.sizes(), topk_ids.sizes());
   CHECK_DIM(2, hidden_states);
-  if (moe_comp_method == 4 && is_vnni){
-    CHECK_DIM(5, w1);
-    CHECK_DIM(5, w2);
-  }else{
+  if (moe_comp_method == 4 && is_vnni) {
+    CHECK_DIM(4, w1);
+    CHECK_DIM(4, w2);
+  } else {
     CHECK_DIM(3, w1);
     CHECK_DIM(3, w2);
   }
@@ -996,7 +994,7 @@ at::Tensor fused_experts_cpu(
 
   int64_t M = hidden_states.size(0);
   int64_t K = hidden_states.size(1);
-  int64_t N = moe_comp_method == 4 ? w1.size(1) * w1.size(4) : w1.size(1) / 2;
+  int64_t N = moe_comp_method == 4 ? w1_scale.value().size(1) * w1_scale.value().size(3) / 2 : w1.size(1) / 2;
   int64_t E = w1.size(0);
   int64_t topk = topk_weights_.size(1);
 
@@ -1006,7 +1004,7 @@ at::Tensor fused_experts_cpu(
 
   // check weight shapes
   CHECK_EQ(w2.size(0), E);
-  if (moe_comp_method !=4){
+  if (moe_comp_method != 4) {
     CHECK_EQ(w2.size(1), K);
     CHECK_EQ(packed_w1.size(2), packed_K / (moe_comp_method == 3 ? 2 : 1));
     CHECK_EQ(packed_w2.size(2), packed_N / (moe_comp_method == 3 ? 2 : 1));
@@ -1208,7 +1206,6 @@ at::Tensor fused_experts_cpu(
 
       // weight + compensation shape = [Nc, Kc, block_n * block_k / 2 + block_n*sizeof(int32_t)]
       // scales/qzeros shape = [E, Nc, G, block_n]
-      int64_t block_k = packed_w1.size(3);
       int64_t num_groups = w1_scale.value().size(2);
       const int group_size = K / num_groups;
       // TODO: check scales and zeros
@@ -1229,8 +1226,6 @@ at::Tensor fused_experts_cpu(
           w2_zero.value().data_ptr<int8_t>(),
           w1_scale.value().data_ptr<float>(),
           w2_scale.value().data_ptr<float>(),
-          compensation_w1.value().data_ptr<int32_t>(),
-          compensation_w2.value().data_ptr<int32_t>(),
           group_size,
           topk_weights.data_ptr<float>(),
           sorted_ids,
@@ -1242,7 +1237,7 @@ at::Tensor fused_experts_cpu(
           E,
           topk,
           num_tokens_post_pad,
-          block_k);
+          BLOCK_K);
     } else {
       scalar_t* __restrict__ A_tmp = intermediate_cache2 + M * topk * K;
       float* __restrict__ C_tmp = (float*)((void*)(A_tmp + num_threads * BLOCK_M * K));

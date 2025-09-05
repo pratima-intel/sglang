@@ -1,3 +1,7 @@
+#include <ATen/native/CPUBlas.h>
+#include <c10/util/Unroll.h>
+#include <torch/all.h>
+
 #include "gemm.h"
 #include "vec.h"
 namespace {
@@ -417,73 +421,6 @@ inline void store_out(const float* y_buf, out_dtype* c_ptr, int64_t m, /* int64_
   }
 }
 
-template <bool cpublas_can_pack, int64_t N, int64_t ldb, bool sym_quant_a>
-void dequant_gemm_accum2(
-    float* C,
-    const uint8_t* A,
-    const float* scales_a,
-    const int32_t* qzeros_a,
-    const uint8_t* B,
-    const float* scales_b,
-    const int8_t* qzeros_b,
-    const int32_t* compensation,
-    int64_t M,
-    int64_t K,
-    int64_t lda,
-    int64_t ldc) {
-  // Compute GEMM int8 * int8 -> int32
-  // dequant result to float by applying scales/qzeros
-#if defined(CPU_CAPABILITY_AVX512)
-  if (M <= 4 && cpublas_can_pack) {
-    switch (M) {
-      case 1:
-        call_dequant_gemm_accum_small_M(1);
-        return;
-      case 2:
-        call_dequant_gemm_accum_small_M(2);
-        return;
-      case 3:
-        call_dequant_gemm_accum_small_M(3);
-        return;
-      case 4:
-        call_dequant_gemm_accum_small_M(4);
-        return;
-    }
-  }
-#endif
-
-  int8_t dqB[K * N];
-  _dequant_weight_zp_only<N, ldb>(B, dqB, qzeros_b, K);
-  using Tin = typename ActDtype<sym_quant_a>::type;
-  Tin* A_ptr = (Tin*)A;
-#if defined(CPU_CAPABILITY_AVX512)
-  if (cpublas_can_pack) {
-    int32_t C_i32[M * N];
-    at::native::cpublas::brgemm(
-        M, N, K, lda, N /*ldb*/, N /*ldc*/, false /* add_C */, A_ptr, dqB, C_i32, true /* is_vnni */);
-    _mm_prefetch(B + N * K / 2, _MM_HINT_T0);
-    _mm_prefetch(A + K, _MM_HINT_T0);
-    _dequant_and_store<true, N, sym_quant_a>(
-        C, C_i32, scales_a, qzeros_a, scales_b, compensation, M, N /*ldi*/, ldc, 1 /*ldsa*/);
-  } else
-#endif
-  {
-    for (int64_t i = 0; i < M; ++i) {
-      for (int64_t j = 0; j < N; ++j) {
-        float sum = 0;
-        for (int64_t k = 0; k < K; ++k) {
-          if constexpr (sym_quant_a) {
-            sum += ((int32_t)A_ptr[i * lda + k] * dqB[k * N + j]);
-          } else {
-            sum += ((int32_t)A_ptr[i * lda + k] - qzeros_a[i]) * (int32_t)dqB[k * N + j];
-          }
-        }
-        C[i * ldc + j] += sum * scales_a[i] * scales_b[j];
-      }
-    }
-  }
-}
-
 template <typename out_dtype, bool cpublas_can_pack, bool sym_quant_a>
 void _da8w4_linear_impl(
     const at::Tensor& input,
@@ -504,14 +441,13 @@ void _da8w4_linear_impl(
     TORCH_CHECK(input_scales.sizes() == input_qzeros.sizes(), "DA8W4: unexpected input qzeros shape");
   }
 
-  // weight + compensation shape = [Nc, Kc, block_n * block_k / 2 + block_n*sizeof(int32_t)]
-  // scales/qzeros shape = [Nc, G, block_n]
+  // weight + compensation shape = [Nc, Kc, BLOCK_N * block_k / 2 + BLOCK_N*sizeof(int32_t)]
+  // scales/qzeros shape = [Nc, G, BLOCK_N]
 
   int64_t Nc = weight.size(0);
   int64_t Kc = weight.size(1);
   int64_t block_k = BLOCK_K;
-  constexpr int64_t block_n = BLOCK_N;
-  int64_t N = Nc * block_n;
+  int64_t N = Nc * BLOCK_N;
   TORCH_CHECK(K == Kc * block_k, "DA8W4: weight and input shapes mismatch");
   int64_t block_m = [&]() -> long {
     if (M <= 48) {
@@ -528,7 +464,7 @@ void _da8w4_linear_impl(
   bool parallel_on_M = M > 128;
   int64_t num_blocks = parallel_on_M ? Mc * Nc : Nc;
 
-  // scales/qzeros shape = [Nc, G, block_n]
+  // scales/qzeros shape = [Nc, G, BLOCK_N]
   int64_t num_groups = weight_scales.size(1);
   int64_t group_size = K / num_groups;
   TORCH_CHECK(group_size % block_k == 0, "DA8W4 CPU: group_size should be divisible by block_k");
@@ -552,31 +488,31 @@ void _da8w4_linear_impl(
 
       for (int mci = mc; mci < mc_end; ++mci) {
         int64_t m_size = mci * block_m + block_m > M ? M - mci * block_m : block_m;
-        alignas(64) float y_buf[m_size][block_n];
+        alignas(64) float y_buf[m_size][BLOCK_N];
         // copy bias to y_buf if bias is not None
-        auto bias_data = bias_ptr ? bias_ptr + nc * block_n : nullptr;
-        copy_bias<block_n>(bias_data, y_buf[0], m_size);
+        auto bias_data = bias_ptr ? bias_ptr + nc * BLOCK_N : nullptr;
+        copy_bias<BLOCK_N>(bias_data, y_buf[0], m_size);
         for (int kci = 0; kci < Kc; ++kci) {
           int32_t* compensation_ptr =
               sym_quant_a ? nullptr
-                          : (int32_t*)(void*)(b_ptr + (nc * Kc + kci) * (block_n * (block_k / 2 + sizeof(int32_t))) +
-                                              block_k * block_n / 2) /*Bcomp*/;
-          _dequant_gemm_accum<cpublas_can_pack, block_n, block_n / 2, sym_quant_a>(
+                          : (int32_t*)(void*)(b_ptr + (nc * Kc + kci) * (BLOCK_N * (block_k / 2 + sizeof(int32_t))) +
+                                              block_k * BLOCK_N / 2) /*Bcomp*/;
+          _dequant_gemm_accum<cpublas_can_pack, BLOCK_N, BLOCK_N / 2, sym_quant_a>(
               y_buf[0] /*C*/,
               (uint8_t*)a_ptr + mci * block_m * K + kci * block_k /*A*/,
               a_scales_ptr + mci * block_m /*scales_a*/,
               a_qzeros_ptr + mci * block_m /*qzeros_a*/,
-              b_ptr + (nc * Kc + kci) * (block_n * (block_k / 2 + sizeof(int32_t))),
-              b_scales_ptr + nc * block_n * num_groups + kci / block_per_group * block_n /*scales_b*/,
-              b_qzeros_ptr + nc * block_n * num_groups + kci / block_per_group * block_n /*qzeros_b*/,
+              b_ptr + (nc * Kc + kci) * (BLOCK_N * (block_k / 2 + sizeof(int32_t))),
+              b_scales_ptr + nc * BLOCK_N * num_groups + kci / block_per_group * BLOCK_N /*scales_b*/,
+              b_qzeros_ptr + nc * BLOCK_N * num_groups + kci / block_per_group * BLOCK_N /*qzeros_b*/,
               compensation_ptr /*Bcomp*/,
               m_size /*M*/,
               block_k /*K*/,
               K /*lda*/,
-              block_n /*ldc*/);
+              BLOCK_N /*ldc*/);
         }
         // store y_buf to output with dtype conversion
-        store_out<out_dtype, block_n>(y_buf[0], c_ptr + mci * block_m * N + nc * block_n, m_size, N /*lda*/);
+        store_out<out_dtype, BLOCK_N>(y_buf[0], c_ptr + mci * block_m * N + nc * BLOCK_N, m_size, N /*lda*/);
       }
     }
     if constexpr (cpublas_can_pack) {
@@ -668,7 +604,7 @@ void tiny_dequant_gemm_kernel(
     int64_t ldc_f,
     int64_t ldc_s,
     bool store_out) {
-  dequant_gemm_accum2<true, N, ldb, false>(
+  _dequant_gemm_accum<true, N, ldb, false>(
       C_temp, A, scales_a, qzeros_a, B, scales_b, qzeros_b, compensation, M, K, lda, ldc_f);
   if (store_out) {
     // copy from Ctmp to C
@@ -696,7 +632,5 @@ void tiny_dequant_gemm_kernel(
       int64_t ldc_s,                                                 \
       bool store_out)
 
-INSTANTIATE_TINY_DEQUANT_GEMM_TEMPLATE(at::BFloat16, 32, 16);
-INSTANTIATE_TINY_DEQUANT_GEMM_TEMPLATE(at::Half, 32, 16);
-INSTANTIATE_TINY_DEQUANT_GEMM_TEMPLATE(at::BFloat16, 32, 32);
-INSTANTIATE_TINY_DEQUANT_GEMM_TEMPLATE(at::Half, 32, 32);
+INSTANTIATE_TINY_DEQUANT_GEMM_TEMPLATE(at::BFloat16, BLOCK_N, BLOCK_N / 2);
+INSTANTIATE_TINY_DEQUANT_GEMM_TEMPLATE(at::Half, BLOCK_N, BLOCK_N / 2);

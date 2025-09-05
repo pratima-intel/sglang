@@ -1,6 +1,5 @@
 #pragma once
 #include <ATen/native/CPUBlas.h>
-#include <c10/util/Unroll.h>
 
 #include "common.h"
 
@@ -305,8 +304,6 @@ void fused_experts_int4_w4a8_kernel_impl(
     const int8_t* __restrict__ w2z,
     const float* __restrict__ w1s,
     const float* __restrict__ w2s,
-    const int32_t* __restrict__ compensation_w1,
-    const int32_t* __restrict__ compensation_w2,
     int group_size,
     const float* __restrict__ topk_weights,
     const int32_t* __restrict__ sorted_ids,

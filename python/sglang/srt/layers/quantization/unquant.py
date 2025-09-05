@@ -350,8 +350,6 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, CustomOp):
                 None,  # block_size
                 None,  # a1_scale
                 None,  # a2_scale
-                None,  # w1_compa
-                None,  # w2_compa 
                 True,  # is_vnni
             )
         else:
