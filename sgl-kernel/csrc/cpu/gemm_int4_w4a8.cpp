@@ -441,31 +441,34 @@ void _da8w4_linear_impl(
     TORCH_CHECK(input_scales.sizes() == input_qzeros.sizes(), "DA8W4: unexpected input qzeros shape");
   }
 
-  // weight + compensation shape = [Nc, Kc, block_n * block_k / 2 + block_n*sizeof(int32_t)]
-  // scales/qzeros shape = [Nc, G, block_n]
+  // weight + compensation shape = [NB, Kc, block_n * block_k / 2 + block_n*sizeof(int32_t)]
+  // scales/qzeros shape = [NB, G, block_n]
 
-  int64_t Nc = weight.size(0);
+  int64_t NB = weight.size(0);
+  int64_t BLOCK_M = block_size_m();
+  const int64_t MB = div_up(M, BLOCK_M);
   int64_t Kc = weight.size(1);
   int64_t block_k = BLOCK_K;
   constexpr int64_t block_n = BLOCK_N;
-  int64_t N = Nc * block_n;
+  int64_t N = NB * block_n;
   TORCH_CHECK(K == Kc * block_k, "DA8W4: weight and input shapes mismatch");
-  int64_t block_m = [&]() -> long {
-    if (M <= 48) {
-      return M;
-    } else if (M < 64) {
-      return 32;
-    } else if (M < 96) {
-      return 64;
-    } else {
-      return 128;
-    }
-  }();
-  int64_t Mc = (M + block_m - 1) / block_m;
-  bool parallel_on_M = M > 128;
-  int64_t num_blocks = parallel_on_M ? Mc * Nc : Nc;
+  // int64_t BLOCK_M = [&]() -> long {
+  //   if (M <= 48) {
+  //     return M;
+  //   } else if (M < 64) {
+  //     return 32;
+  //   } else if (M < 96) {
+  //     return 64;
+  //   } else {
+  //     return 128;
+  //   }
+  // }();
+  // int64_t MB = (M + BLOCK_M - 1) / BLOCK_M;
+  // bool parallel_on_M = M > 128;
+  // int64_t num_blocks = parallel_on_M ? MB * NB : NB;
+  bool  parallel_on_M = true;
 
-  // scales/qzeros shape = [Nc, G, block_n]
+  // scales/qzeros shape = [NB, G, block_n]
   int64_t num_groups = weight_scales.size(1);
   int64_t group_size = K / num_groups;
   TORCH_CHECK(group_size % block_k == 0, "DA8W4 CPU: group_size should be divisible by block_k");
@@ -480,32 +483,36 @@ void _da8w4_linear_impl(
   const int8_t* b_qzeros_ptr = weight_qzeros.data_ptr<int8_t>();
   out_dtype* c_ptr = output.data_ptr<out_dtype>();
   const float* bias_ptr = bias.has_value() ? bias.value().data_ptr<float>() : nullptr;
+  bool has_bias = bias.has_value();
 
-  at::parallel_for(0, num_blocks, 1, [&](int64_t begin, int64_t end) {
-    for (const auto i : c10::irange(begin, end)) {
-      int64_t mc = parallel_on_M ? i / Nc : 0;
-      int64_t nc = parallel_on_M ? i % Nc : i;
-      int64_t mc_end = parallel_on_M ? mc + 1 : Mc;
+  AT_DISPATCH_BOOL(has_bias, has_bias, [&] {
+    parallel_2d(MB, NB, [&](int64_t mb0, int64_t mb1, int64_t nb0, int64_t nb1) {
+  // at::parallel_for(0, num_blocks, 1, [&](int64_t begin, int64_t end) {
+  //   for (const auto i : c10::irange(begin, end)) {
+    loop_2d<int8_t>(mb0, mb1, nb0, nb1, BLOCK_N * K, [&](int64_t mb, int64_t nb, int64_t nb_offset) {
+      // int64_t mb = parallel_on_M ? i / NB : 0;
+      // int64_t nb = parallel_on_M ? i % NB : i;
+      int64_t mc_end = parallel_on_M ? mb + 1 : MB;
 
-      for (int mci = mc; mci < mc_end; ++mci) {
-        int64_t m_size = mci * block_m + block_m > M ? M - mci * block_m : block_m;
+      // for (int mci = mb; mci < mc_end; ++mci) {
+        int64_t m_size = mb * BLOCK_M + BLOCK_M > M ? M - mb * BLOCK_M : BLOCK_M;
         alignas(64) float y_buf[m_size][block_n];
         // copy bias to y_buf if bias is not None
-        auto bias_data = bias_ptr ? bias_ptr + nc * block_n : nullptr;
+        auto bias_data = bias_ptr ? bias_ptr + nb * block_n : nullptr;
         copy_bias<block_n>(bias_data, y_buf[0], m_size);
         for (int kci = 0; kci < Kc; ++kci) {
           int32_t* compensation_ptr =
               sym_quant_a ? nullptr
-                          : (int32_t*)(void*)(b_ptr + (nc * Kc + kci) * (block_n * (block_k / 2 + sizeof(int32_t))) +
+                          : (int32_t*)(void*)(b_ptr + (nb * Kc + kci) * (block_n * (block_k / 2 + sizeof(int32_t))) +
                                               block_k * block_n / 2) /*Bcomp*/;
           _dequant_gemm_accum<cpublas_can_pack, block_n, block_n / 2, sym_quant_a>(
               y_buf[0] /*C*/,
-              (uint8_t*)a_ptr + mci * block_m * K + kci * block_k /*A*/,
-              a_scales_ptr + mci * block_m /*scales_a*/,
-              a_qzeros_ptr + mci * block_m /*qzeros_a*/,
-              b_ptr + (nc * Kc + kci) * (block_n * (block_k / 2 + sizeof(int32_t))),
-              b_scales_ptr + nc * block_n * num_groups + kci / block_per_group * block_n /*scales_b*/,
-              b_qzeros_ptr + nc * block_n * num_groups + kci / block_per_group * block_n /*qzeros_b*/,
+              (uint8_t*)a_ptr + mb * BLOCK_M * K + kci * block_k /*A*/,
+              a_scales_ptr + mb * BLOCK_M /*scales_a*/,
+              a_qzeros_ptr + mb * BLOCK_M /*qzeros_a*/,
+              b_ptr + (nb * Kc + kci) * (block_n * (block_k / 2 + sizeof(int32_t))),
+              b_scales_ptr + nb * block_n * num_groups + kci / block_per_group * block_n /*scales_b*/,
+              b_qzeros_ptr + nb * block_n * num_groups + kci / block_per_group * block_n /*qzeros_b*/,
               compensation_ptr /*Bcomp*/,
               m_size /*M*/,
               block_k /*K*/,
@@ -513,12 +520,13 @@ void _da8w4_linear_impl(
               block_n /*ldc*/);
         }
         // store y_buf to output with dtype conversion
-        store_out<out_dtype, block_n>(y_buf[0], c_ptr + mci * block_m * N + nc * block_n, m_size, N /*lda*/);
-      }
-    }
+        store_out<out_dtype, block_n>(y_buf[0], c_ptr + mb * BLOCK_M * N + nb * block_n, m_size, N /*lda*/);
+      // }
+      });
     if constexpr (cpublas_can_pack) {
       at::native::cpublas::brgemm_release();
     }
+    });
   });
 }
 
