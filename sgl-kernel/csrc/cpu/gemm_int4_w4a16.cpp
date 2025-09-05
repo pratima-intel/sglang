@@ -636,15 +636,13 @@ void int4_w4a16_linear_kernel_impl(
   }
 
   // l2 cache block for n
-  int64_t cache_blocks_nb = get_cache_blocks<scalar_t>(BLOCK_N * K);
+  // int64_t cache_blocks_nb = get_cache_blocks<at::quint4x2>(BLOCK_N*K);
   AT_DISPATCH_BOOL(bias != nullptr, has_bias, [&] {
-    parallel_2d(MB, NB, [&](int64_t begin_mb, int64_t end_mb, int64_t begin_nb, int64_t end_nb) {
+    parallel_2d(MB, NB, [&](int64_t mb0, int64_t mb1, int64_t nb0, int64_t nb1) {
       // for brgemm, use float32 for accumulate
       alignas(64) float Ctmp[BLOCK_M * BLOCK_N];
       alignas(64) scalar_t Btmp_inner[BLOCK_N * BLOCK_K];
-      for (int64_t nbb = begin_nb; nbb < end_nb; nbb += cache_blocks_nb) {
-        for (int64_t mb = begin_mb; mb < end_mb; ++mb) {
-          for (int64_t nb = nbb; nb < std::min(nbb + cache_blocks_nb, end_nb); ++nb) {
+      loop_2d<scalar_t>(mb0, mb1, nb0, nb1, BLOCK_N * K, [&](int64_t mb, int64_t nb, int64_t nb_offset) {
             int64_t mb_start = mb * BLOCK_M;
             int64_t mb_size = std::min(M - mb_start, BLOCK_M);
             int64_t nb_start = nb * BLOCK_N;
@@ -669,9 +667,7 @@ void int4_w4a16_linear_kernel_impl(
                 /* sBs  */ N,
                 /* brg  */ use_brgemm,
                 /* dequant choice*/ use_brgemm_dequant_out);
-          }
-        }
-      }
+      });
       if (use_brgemm) {
         at::native::cpublas::brgemm_release();
       }
