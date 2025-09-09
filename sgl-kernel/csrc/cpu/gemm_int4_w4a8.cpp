@@ -546,7 +546,7 @@ at::Tensor int4_scaled_mm_cpu_with_quant(
   return output;
 }
 template <typename scalar_t>
-inline void copy_stub2(scalar_t* __restrict__ out, const float* __restrict__ input, int64_t size) {
+inline void copy_stub(scalar_t* __restrict__ out, const float* __restrict__ input, int64_t size) {
   using Vec = at::vec::Vectorized<scalar_t>;
   using fVec = at::vec::Vectorized<float>;
 // no remainder
@@ -583,7 +583,7 @@ void tinygemm_kernel(
   if (store_out) {
     // copy from Ctmp to C
     for (int64_t m = 0; m < M; ++m) {
-      copy_stub2<scalar_t>(C + m * ldc_s, C_temp + m * ldc_f, BLOCK_N);
+      copy_stub<scalar_t>(C + m * ldc_s, C_temp + m * ldc_f, BLOCK_N);
     }
   }
 }

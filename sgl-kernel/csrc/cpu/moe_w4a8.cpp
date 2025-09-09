@@ -171,20 +171,6 @@ inline void silu_and_mul_stub(
 
 }  // anonymous namespace
 
-template <typename scalar_t>
-inline void copy_stub2(scalar_t* __restrict__ out, const float* __restrict__ input, int64_t size) {
-  using Vec = at::vec::Vectorized<scalar_t>;
-  using fVec = at::vec::Vectorized<float>;
-// no remainder
-#pragma GCC unroll 4
-  for (int64_t d = 0; d < size; d += Vec::size()) {
-    fVec x0 = fVec::loadu(input + d);
-    fVec x1 = fVec::loadu(input + d + fVec::size());
-    Vec res = convert_from_float_ext<scalar_t>(x0, x1);
-    res.store(out + d);
-  }
-}
-
 // TODO: stride access
 template <int64_t N>
 inline void copy_bias(const float* bias_ptr, float* y_buf, int64_t m, int64_t ldn) {
