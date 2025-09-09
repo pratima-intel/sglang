@@ -2,18 +2,6 @@
 #include "gemm.h"
 #include "vec.h"
 namespace {
-static bool cpublas_checked = false;
-static bool cpublas_can_pack = false;
-
-bool cpublas_could_pack() {
-  // the could_pack check requires AMX support implicitly
-  if (cpublas_checked) {
-    return cpublas_can_pack;
-  }
-  cpublas_can_pack = at::native::cpublas::could_pack(at::kByte);
-  cpublas_checked = true;
-  return cpublas_can_pack;
-}
 
 template <typename scalar_t>
 inline void copy_stub(scalar_t* __restrict__ out, const scalar_t* __restrict__ input, int64_t size) {
@@ -285,6 +273,7 @@ void fused_experts_int4_w4a8_kernel_impl(
       quantize_row_int8<scalar_t>(Aq_tmp + m * K, As_tmp[m], input + m * K, K);
     }
   });
+
   auto Azp = at::ones({M * topk}).to(at::kInt).mul(128);
   auto Azp_ptr = Azp.data_ptr<int32_t>();
   // stage 1: intermediate_cache0 = hidden_states @ w1
@@ -306,9 +295,9 @@ void fused_experts_int4_w4a8_kernel_impl(
     int tid = at::get_thread_num();
     alignas(64) float As[BLOCK_M];
     uint8_t* __restrict__ A = A_tmp + tid * BLOCK_M * K;
-    bool cpublas_can_pack = cpublas_could_pack();
     float* __restrict__ C0 = C_tmp + tid * 2 * BLOCK_M * BLOCK_N;
     float* __restrict__ C1 = C0 + BLOCK_M * BLOCK_N;
+    bool is_brgemm_used = false;
     for (int64_t i = begin; i < end; ++i) {
       int64_t mb = i / NB;
       int64_t nb = i % NB;
@@ -324,7 +313,8 @@ void fused_experts_int4_w4a8_kernel_impl(
       // 1.a load A
       const int32_t* A_ids = sorted_ids + mb * BLOCK_M;
       int64_t m_size = offsets[mb + 1] - offsets[mb];
-
+      const bool use_brgemm = can_use_brgemm<int8_t>(m_size);
+      is_brgemm_used = is_brgemm_used || use_brgemm;
       // copy to A [BLOCK_M, K]
       for (int64_t m = 0; m < m_size; ++m) {
         int32_t index = A_ids[m] / topk;
@@ -339,7 +329,7 @@ void fused_experts_int4_w4a8_kernel_impl(
             sym_quant_a ? nullptr
                         : (int32_t*)(void*)(B + (nb * Kc + kci) * (BLOCK_N * (BLOCK_K / 2 + sizeof(int32_t))) +
                                             BLOCK_K * BLOCK_N / 2) /*Bcomp*/;
-        tinygemm_kernel<scalar_t, BLOCK_N, BLOCK_N / 2>(
+        tinygemm_kernel<scalar_t>(
             ic0 + offset * 2 * N + nb * BLOCK_N,
             C0,
             A + kci * BLOCK_K,
@@ -354,7 +344,8 @@ void fused_experts_int4_w4a8_kernel_impl(
             K,
             BLOCK_N,
             2 * N,
-            kci == Kc - 1);
+            kci == Kc - 1,
+            use_brgemm);
       }
 
       for (int kci = 0; kci < Kc; ++kci) {
@@ -362,7 +353,7 @@ void fused_experts_int4_w4a8_kernel_impl(
             sym_quant_a ? nullptr
                         : (int32_t*)(void*)(B + (nb1 * Kc + kci) * (BLOCK_N * (BLOCK_K / 2 + sizeof(int32_t))) +
                                             BLOCK_K * BLOCK_N / 2) /*Bcomp*/;
-        tinygemm_kernel<scalar_t, BLOCK_N, BLOCK_N / 2>(
+        tinygemm_kernel<scalar_t>(
             ic0 + offset * 2 * N + nb1 * BLOCK_N,
             C1,
             A + kci * BLOCK_K,
@@ -377,11 +368,12 @@ void fused_experts_int4_w4a8_kernel_impl(
             K,
             BLOCK_N,
             2 * N,
-            kci == Kc - 1);
+            kci == Kc - 1,
+            use_brgemm);
       }
     }
 
-    if (cpublas_can_pack) {
+    if (is_brgemm_used) {
       at::native::cpublas::brgemm_release();
     }
   });
@@ -412,15 +404,16 @@ void fused_experts_int4_w4a8_kernel_impl(
   // parallel on [MB2, NB2]
   at::parallel_for(0, MB2 * NB2, 0, [&](int64_t begin, int64_t end) {
     int tid = at::get_thread_num();
-    bool cpublas_can_pack = cpublas_could_pack();
     float* __restrict__ C2 = C_tmp + tid * 2 * BLOCK_M * BLOCK_N;
+    bool is_brgemm_used = false;
     for (int64_t i = begin; i < end; ++i) {
       int64_t mb = i / NB2;
       int64_t nb = i % NB2;
 
       int64_t m_size = offsets[mb + 1] - offsets[mb];
       int64_t n_size = std::min(OC - nb * BLOCK_N, BLOCK_N);
-
+      const bool use_brgemm = can_use_brgemm<int8_t>(m_size);
+      is_brgemm_used = is_brgemm_used || use_brgemm;
       const int32_t* A_ids = sorted_ids + mb * BLOCK_M;
 
       // B shape [IC, n_size] in vnni format
@@ -441,7 +434,7 @@ void fused_experts_int4_w4a8_kernel_impl(
             sym_quant_a ? nullptr
                         : (int32_t*)(void*)(B + (nb * Kc + kci) * (BLOCK_N * (BLOCK_K / 2 + sizeof(int32_t))) +
                                             BLOCK_K * BLOCK_N / 2) /*Bcomp*/;
-        tinygemm_kernel<scalar_t, BLOCK_N, BLOCK_N / 2>(
+        tinygemm_kernel<scalar_t>(
             nullptr,
             C2,
             A + kci * BLOCK_K,
@@ -456,7 +449,8 @@ void fused_experts_int4_w4a8_kernel_impl(
             IC,
             BLOCK_N,
             BLOCK_N,
-            false);
+            false,
+            use_brgemm);
       }
 
       // 2.b copy from C to ic2 in original order
@@ -468,7 +462,7 @@ void fused_experts_int4_w4a8_kernel_impl(
       }
     }
 
-    if (cpublas_can_pack) {
+    if (is_brgemm_used) {
       at::native::cpublas::brgemm_release();
     }
   });

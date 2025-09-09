@@ -298,7 +298,7 @@ void tinygemm_kernel(
     int64_t block_size_K,
     bool do_unpack = true);
 
-template <typename scalar_t, int64_t N, int64_t ldb>
+template <typename scalar_t>
 void tinygemm_kernel(
     scalar_t* C,
     float* C_temp,
@@ -314,4 +314,5 @@ void tinygemm_kernel(
     int64_t lda,
     int64_t ldc_f,
     int64_t ldc_s,
-    bool store_out);
+    bool store_out,
+    bool use_brgemm);
