@@ -32,27 +32,6 @@ inline void copy_stub(scalar_t* __restrict__ out, const float* __restrict__ inpu
     out[d] = static_cast<scalar_t>(input[d]);
   }
 }
-template <typename scalar_t>
-inline void copy_mul_stub(scalar_t* __restrict__ out, const scalar_t* __restrict__ input, float weight, int64_t size) {
-  using bVec = at::vec::Vectorized<scalar_t>;
-  using fVec = at::vec::Vectorized<float>;
-  constexpr int kVecSize = bVec::size();
-  const fVec weight_vec = fVec(weight);
-  int64_t d;
-#pragma GCC unroll 4
-  for (d = 0; d <= size - kVecSize; d += kVecSize) {
-    bVec x = bVec::loadu(input + d);
-    fVec x0, x1;
-    std::tie(x0, x1) = at::vec::convert_to_float(x);
-    x0 = x0 * weight_vec;
-    x1 = x1 * weight_vec;
-    bVec out_vec = convert_from_float_ext<scalar_t>(x0, x1);
-    out_vec.store(out + d);
-  }
-  for (; d < size; ++d) {
-    out[d] = static_cast<scalar_t>(input[d] * weight);
-  }
-}
 
 template <typename scalar_t>
 inline void copy_mul_stub(scalar_t* __restrict__ out, const float* __restrict__ input, float weight, int64_t size) {
