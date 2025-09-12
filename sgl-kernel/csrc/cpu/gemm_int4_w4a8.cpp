@@ -263,6 +263,7 @@ void _dequant_gemm_accum_small_M(
   _dequant_gemm_accum_small_M<M, N, ldb, sym_quant_a>(C, A, scales_a, qzeros_a, B, scales_b, qzeros_b, K, lda, ldc);
 #endif
 
+
 template <int64_t N, int64_t ldb, bool sym_quant_a>
 void _dequant_gemm_accum(
     float* C,
@@ -458,29 +459,33 @@ void _da8w4_linear_impl(
   out_dtype* c_ptr = output.data_ptr<out_dtype>();
   const float* bias_ptr = bias.has_value() ? bias.value().data_ptr<float>() : nullptr;
   bool has_bias = bias.has_value();
-
-  AT_DISPATCH_BOOL(has_bias, has_bias, [&] {
+  int num_threads = 40;//;at::get_num_threads();
+  int64_t buffer_size_nbytes = num_threads * BLOCK_M * BLOCK_N * 4;
+  auto buffer2 = at::empty({buffer_size_nbytes}, input.options().dtype(at::kChar));
+  float*  C_tmp2 = (float*)((void*)(buffer2.data_ptr<int8_t>()));
+  AT_DISPATCH_BOOL(bias_ptr != nullptr, has_bias, [&] {
     parallel_2d(MB, NB, [&](int64_t mb0, int64_t mb1, int64_t nb0, int64_t nb1) {
   // at::parallel_for(0, num_blocks, 1, [&](int64_t begin, int64_t end) {
   //   for (const auto i : c10::irange(begin, end)) {
-    loop_2d<int8_t>(mb0, mb1, nb0, nb1, BLOCK_N * K, [&](int64_t mb, int64_t nb, int64_t nb_offset) {
+    int tid = get_thread_num();
+    float*  C_tmp = C_tmp2 + tid * BLOCK_M * BLOCK_N;
+    loop_2d<float>(mb0, mb1, nb0, nb1, BLOCK_N * K, [&](int64_t mb, int64_t nb, int64_t nb_offset) {
       // int64_t mb = parallel_on_M ? i / NB : 0;
       // int64_t nb = parallel_on_M ? i % NB : i;
       int64_t mc_end = parallel_on_M ? mb + 1 : MB;
 
       // for (int mci = mb; mci < mc_end; ++mci) {
         int64_t m_size = mb * BLOCK_M + BLOCK_M > M ? M - mb * BLOCK_M : BLOCK_M;
-        alignas(64) float y_buf[m_size][BLOCK_N];
         // copy bias to y_buf if bias is not None
         auto bias_data = bias_ptr ? bias_ptr + nb * BLOCK_N : nullptr;
-        copy_bias<BLOCK_N>(bias_data, y_buf[0], m_size);
+        copy_bias<BLOCK_N>(bias_data, C_tmp, m_size);
         for (int kci = 0; kci < Kc; ++kci) {
           int32_t* compensation_ptr =
               sym_quant_a ? nullptr
                           : (int32_t*)(void*)(b_ptr + (nb * Kc + kci) * (BLOCK_N * (BLOCK_K / 2 + sizeof(int32_t))) +
                                               BLOCK_K * BLOCK_N / 2) /*Bcomp*/;
           _dequant_gemm_accum<BLOCK_N, BLOCK_N / 2, sym_quant_a>(
-              y_buf[0] /*C*/,
+               C_tmp, /*C*/,
               (uint8_t*)a_ptr + mb * BLOCK_M * K + kci * BLOCK_K /*A*/,
               a_scales_ptr + mb * BLOCK_M /*scales_a*/,
               a_qzeros_ptr + mb * BLOCK_M /*qzeros_a*/,
@@ -495,7 +500,7 @@ void _da8w4_linear_impl(
               use_brgemm);
         }
         // store y_buf to output with dtype conversion
-        store_out<out_dtype, BLOCK_N>(y_buf[0], c_ptr + mb * BLOCK_M * N + nb * BLOCK_N, m_size, N /*lda*/);
+        store_out<out_dtype, BLOCK_N>( C_tmp, c_ptr + mb * BLOCK_M * N + nb * BLOCK_N, m_size, N /*lda*/);
       // }
       });
     if (use_brgemm) {
