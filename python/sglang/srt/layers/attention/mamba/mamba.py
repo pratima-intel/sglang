@@ -54,7 +54,9 @@ def mamba_v2_sharded_weight_loader(
             #     pad_size = loaded_start_idx + take - loaded_weight.size(0)
             #     pad_t = torch.zeros(pad_size, loaded_weight.size(1), loaded_weight.size(2)).to(loaded_weight.dtype)
             #     loaded_weight = torch.cat((loaded_weight, pad_t), dim=0)
-            if  tp_size == 3 or tp_size == 6:
+            # if loaded_weight.size(0) == 8192:
+            #          print("rank, ", tp_rank, "loaded_start_idx", loaded_start_idx, "take", take)
+            if  (tp_size == 3 or tp_size == 6) and loaded_weight.size(0) == 8192:
                 import copy
                 loaded_weight_ = copy.deepcopy(loaded_weight)
                 q,  k , v = torch.split(
@@ -68,14 +70,22 @@ def mamba_v2_sharded_weight_loader(
                 )
                 pad_qk = torch.zeros(2*128, loaded_weight.size(1), loaded_weight.size(2)).to(loaded_weight.dtype)
                 pad_v = torch.zeros(4*128, loaded_weight.size(1), loaded_weight.size(2)).to(loaded_weight.dtype)
+                # q = torch.cat((q, k), dim=0)
+                # k = torch.cat((q, pad_v), dim=0)
+                # v = torch.cat((k, v), dim=0)
+                # loaded_weight_2 = torch.cat((v, pad_v), dim=0)
+
                 q = torch.cat((q, pad_qk), dim=0)
                 k = torch.cat((k, pad_qk), dim=0)
                 v = torch.cat((v, pad_v), dim=0)
                 loaded_weight_1 = torch.cat((q, k), dim=0)
                 loaded_weight_2 = torch.cat((loaded_weight_1, v), dim=0)
+
+                # pad_v = torch.zeros(8*128, loaded_weight.size(1), loaded_weight.size(2)).to(loaded_weight.dtype)
+                # loaded_weight_2 = torch.cat((loaded_weight_, pad_v), dim=0)
             else:
                 loaded_weight_2 = loaded_weight
-
+            # print("rank, ", tp_rank, "loaded_start_idx", loaded_start_idx, "take", take)
             param.data[
                  boundary : (boundary + take), ...  ] = loaded_weight_2[loaded_start_idx : (loaded_start_idx + take)]
             # param.data[
