@@ -687,25 +687,9 @@ def sharded_weight_loader2(shard_axis: int) -> LoaderFunction:
         start_idx = tp_rank * shard_size
         if is_cpu():
             if (tp_size == 3 or tp_size == 6) and loaded_weight.size(0) == 32 and loaded_weight.dim() == 1:
-                # pad_qk = torch.zeros(4).to(loaded_weight.dtype)
                 pad_qk = torch.tensor([-float("inf"),-float("inf"),-float("inf"),-float("inf")]).to(loaded_weight.dtype)
                 loaded_weight2  = torch.cat((loaded_weight, pad_qk), dim=0)
                 loaded_weight = loaded_weight2.narrow(shard_axis, start_idx, shard_size)
-                # import copy
-                # loaded_weight_ = copy.deepcopy(loaded_weight)
-                # q,  k = torch.split(
-                #     loaded_weight_,
-                #     [
-                #         16,
-                #         16,
-                #     ],
-                #     dim=0,
-                # )
-                # pad_qk = torch.zeros(8).to(loaded_weight.dtype)
-                # q  = torch.cat((q, pad_qk), dim=0)
-                # k  = torch.cat((k, pad_qk), dim=0)
-                # loaded_weight2  = torch.cat((q, k), dim=0)
-                # loaded_weight = loaded_weight2.narrow(shard_axis, start_idx, shard_size)
             else:
                 loaded_weight = loaded_weight.narrow(shard_axis, start_idx, shard_size)
 
@@ -727,10 +711,6 @@ def sharded_weight_loader(shard_axis: int) -> LoaderFunction:
         start_idx = tp_rank * shard_size
         if is_cpu():
             if (tp_size == 3 or tp_size == 6) and loaded_weight.size(0) == 32 and loaded_weight.dim() == 1:
-                # pad_qk = torch.zeros(4).to(loaded_weight.dtype)
-                # # pad_qk = torch.tensor([-float("inf"),-float("inf"),-float("inf"),-float("inf")]).to(loaded_weight.dtype)
-                # loaded_weight2  = torch.cat((loaded_weight, pad_qk), dim=0)
-                # loaded_weight = loaded_weight2.narrow(shard_axis, start_idx, shard_size)
                 import copy
                 loaded_weight_ = copy.deepcopy(loaded_weight)
                 q,  k, v = torch.split(
@@ -742,14 +722,11 @@ def sharded_weight_loader(shard_axis: int) -> LoaderFunction:
                     ],
                     dim=0,
                 )
-                # pad_qk = torch.zeros(8).to(loaded_weight.dtype)
-                pad_qk = torch.zeros(2).to(loaded_weight.dtype)
                 pad_v = torch.zeros(4).to(loaded_weight.dtype)
                 qk  = torch.cat((q, k), dim=0)
                 v  = torch.cat((v, pad_v), dim=0)
                 loaded_weight2  = torch.cat((qk, v), dim=0)
                 loaded_weight = loaded_weight2.narrow(shard_axis, start_idx, shard_size)
-                # print("rank, ", tp_rank, "loaded_start_idx", start_idx, "take", shard_size)
             else:
                 loaded_weight = loaded_weight.narrow(shard_axis, start_idx, shard_size)
 

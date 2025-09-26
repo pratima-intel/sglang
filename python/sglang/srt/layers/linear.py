@@ -370,109 +370,23 @@ class ColumnParallelLinear(LinearBase):
                 from sglang.srt.model_loader.weight_utils import (
                     narrow_padded_param_and_loaded_weight,
                 )
-                # if loaded_weight.size(0) == 12288 and loaded_weight.size(1) == 2048:
-                #     print("rank, ",  self.tp_rank, "loaded_start_idx", start_idx, "take", shard_size)
                 if (tp_size == 3 or tp_size == 6) and loaded_weight.size(0) == 12288 and loaded_weight.size(1) == 2048:
                     import copy
 
                     loaded_weight_ = copy.deepcopy(loaded_weight)
-                    # q,  k , v, z = torch.split(
-                    #     loaded_weight_,
-                    #     [
-                    #         2048,
-                    #         2048,
-                    #         4096,
-                    #         4096,
-                    #     ],
-                    #     dim=0,
-                    # )
-                    # pad_qk = torch.zeros(2*128, loaded_weight.size(1)).to(loaded_weight.dtype)
-                    # pad_vz = torch.zeros(4*128, loaded_weight.size(1)).to(loaded_weight.dtype)
-                    # q = torch.cat((q, pad_qk), dim=0)
-                    # k = torch.cat((k, pad_qk), dim=0)
-                    # v = torch.cat((v, pad_vz), dim=0)
-                    # z = torch.cat((z, pad_vz), dim=0)
-                    # loaded_weight_1 = torch.cat((q, k), dim=0)
-                    # loaded_weight_2 = torch.cat((loaded_weight_1, v), dim=0)
-                    # loaded_weight_3 = torch.cat((loaded_weight_2, z), dim=0)
-                    # loaded_weight = loaded_weight_3.narrow(
-                    #     output_dim, start_idx, shard_size
-                    # )
-
-                    # rank12, q,  k , v , z = torch.split(
-                    #     loaded_weight_,
-                    #     [
-                    #         4608*2,
-                    #         4*128,
-                    #         4*128,
-                    #         8*128,
-                    #         8*128,
-                    #     ],
-                    #     dim=0,
-                    # )
-                    # pad_qk = torch.zeros(2*128, loaded_weight.size(1)).to(loaded_weight.dtype)
-                    # pad_vz = torch.zeros(4*128, loaded_weight.size(1)).to(loaded_weight.dtype)
-                    # q = torch.cat((q, pad_qk), dim=0)
-                    # k = torch.cat((k, pad_qk), dim=0)
-                    # v = torch.cat((v, pad_vz), dim=0)
-                    # z = torch.cat((z, pad_vz), dim=0)
-                    # loaded_weight_1 = torch.cat((rank12, q), dim=0)
-                    # loaded_weight_1 = torch.cat((loaded_weight_1, k), dim=0)
-                    # loaded_weight_1 = torch.cat((loaded_weight_1, v), dim=0)
-                    # loaded_weight_3 = torch.cat((loaded_weight_1, z), dim=0)
-                    # loaded_weight = loaded_weight_3.narrow(
-                    #     output_dim, start_idx, shard_size
-                    # )
-
                     pad_qkvz = torch.zeros(12*128, loaded_weight.size(1)).to(loaded_weight.dtype)
                     loaded_weight_3 = torch.cat((loaded_weight_, pad_qkvz), dim=0)
                     loaded_weight = loaded_weight_3.narrow(
                         output_dim, start_idx, shard_size
                     )
-                    # print("rank, ",  self.tp_rank, "loaded_start_idx", start_idx, "take", shard_size)
                 elif (tp_size == 3 or tp_size == 6) and loaded_weight.size(0) == 64 and loaded_weight.size(1) == 2048:
                     import copy
                     loaded_weight_ = copy.deepcopy(loaded_weight)
-                    # q,  k = torch.split(
-                    #     loaded_weight_,
-                    #     [
-                    #         32,
-                    #         32,
-                    #     ],
-                    #     dim=0,
-                    # )
-                    # pad_qk = torch.zeros(4, loaded_weight.size(1)).to(loaded_weight.dtype)
-                    # q = torch.cat((q, pad_qk), dim=0)
-                    # k = torch.cat((k, pad_qk), dim=0)
-                    # loaded_weight_1 = torch.cat((q, k), dim=0)
-                    # loaded_weight = loaded_weight_1.narrow(
-                    #     output_dim, start_idx, shard_size
-                    # )
-
-                    # ran12, q,  k = torch.split(
-                    #     loaded_weight_,
-                    #     [
-                    #         48,
-                    #         8,
-                    #         8,
-                    #     ],
-                    #     dim=0,
-                    # )
-                    # pad_qk = torch.zeros(4, loaded_weight.size(1)).to(loaded_weight.dtype)
-                    # q = torch.cat((q, pad_qk), dim=0)
-                    # k = torch.cat((k, pad_qk), dim=0)
-                    # loaded_weight_1 = torch.cat((ran12, q), dim=0)
-                    # loaded_weight_2 = torch.cat((loaded_weight_1, k), dim=0)
-                    # loaded_weight = loaded_weight_2.narrow(
-                    #     output_dim, start_idx, shard_size
-                    # )
-
                     pad_qk = torch.zeros(8, loaded_weight.size(1)).to(loaded_weight.dtype)
                     loaded_weight_1 = torch.cat((loaded_weight_, pad_qk), dim=0)
                     loaded_weight = loaded_weight_1.narrow(
                         output_dim, start_idx, shard_size
                     )
-                #     print("rank, ",  self.tp_rank, "loaded_start_idx", start_idx, "take", shard_size)
                 else:
                     param_data, loaded_weight = narrow_padded_param_and_loaded_weight(
                         param_data,

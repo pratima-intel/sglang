@@ -363,10 +363,7 @@ class Qwen3GatedDeltaNet(nn.Module):
             self.num_k_heads // self.attn_tp_size,
             2 * self.num_v_heads // self.num_k_heads,
         )
-        # print(new_tensor_shape_qkvz)
-        # print(new_tensor_shape_ba)
-        # torch.Size([1, 6, 768])
-        # torch.Size([1, 6, 4])
+
         mixed_qkvz = mixed_qkvz.view(*new_tensor_shape_qkvz)
         mixed_ba = mixed_ba.view(*new_tensor_shape_ba)
 
@@ -376,23 +373,12 @@ class Qwen3GatedDeltaNet(nn.Module):
             (self.num_v_heads // self.num_k_heads * self.head_v_dim),
             (self.num_v_heads // self.num_k_heads * self.head_v_dim),
         ]
-        # 128 128 256 256
         split_arg_list_ba = [
             self.num_v_heads // self.num_k_heads,
             self.num_v_heads // self.num_k_heads,
         ]
-        # 2  2 
         # [b, sq, ng, (hn + hn + np/ng * hn + np/ng + np/ng)]
         # --> [b, sq, ng, hn], [b, sq, ng, hn], [b, sq, ng, np/ng * hn], [b, sq, ng, np/ng * hn], [b, sq, ng, np/ng], [b, sq, ng, np/ng]
-        # if self.attn_tp_rank == 2:
-        #     print(mixed_qkvz.shape)
-        #     print(split_arg_list_qkvz)
-        #     print(mixed_ba.shape)
-        #     print(split_arg_list_ba)
-            # torch.Size([1, 6, 768])
-            # [128, 128, 256, 256]
-            # torch.Size([1, 6, 4])
-            # [2, 2]
         (query, key, value, z) = torch.split(mixed_qkvz, split_arg_list_qkvz, dim=2)
         (b, a) = torch.split(mixed_ba, split_arg_list_ba, dim=2)
 
@@ -426,15 +412,9 @@ class Qwen3GatedDeltaNet(nn.Module):
     ):
         seq_len, _ = hidden_states.shape
         is_cuda_graph = forward_batch.forward_mode.is_cuda_graph()
-        # print("rank: ", self.attn_tp_rank, "hidden_states", hidden_states)
-        # print("rank: ", self.attn_tp_rank, "hidden_states shape", hidden_states.shape)
         projected_states_qkvz, projected_states_ba = self._forward_input_proj(
             hidden_states
         )
-        # print("rank: ", self.attn_tp_rank, "projected_states_qkvz", projected_states_qkvz)
-        # print("rank: ", self.attn_tp_rank, "projected_states_qkvz shape", projected_states_qkvz.shape)
-        # print("rank: ", self.attn_tp_rank, "projected_states_ba", projected_states_ba)
-        # print("rank: ", self.attn_tp_rank, "projected_states_ba shape", projected_states_ba.shape)
         if self.num_v_heads // self.num_k_heads in [1, 2, 4] and is_cuda_graph and not _is_cpu:
             mixed_qkv, z, b, a = fused_qkvzba_split_reshape_cat(
                 projected_states_qkvz,
@@ -445,10 +425,6 @@ class Qwen3GatedDeltaNet(nn.Module):
                 self.head_v_dim,
             )
         else:
-            # print("rank: ", self.attn_tp_rank, "projected_states_qkvz", projected_states_qkvz)
-            # print("rank: ", self.attn_tp_rank, "projected_states_qkvz shape", projected_states_qkvz.shape)
-            # print("rank: ", self.attn_tp_rank, "projected_states_ba", projected_states_ba)
-            # print("rank: ", self.attn_tp_rank, "projected_states_ba shape", projected_states_ba.shape)
             query, key, value, z, b, a = self.fix_query_key_value_ordering(
                 projected_states_qkvz, projected_states_ba
             )
@@ -457,13 +433,8 @@ class Qwen3GatedDeltaNet(nn.Module):
             )
             mixed_qkv = torch.cat((query, key, value), dim=-1)
 
-        # print("rank: ", self.attn_tp_rank, "b", b)
-        # print("rank: ", self.attn_tp_rank, "b shape", b.shape)
-        # print("rank: ", self.attn_tp_rank, "a", b)
-        # print("rank: ", self.attn_tp_rank, "a shape", a.shape)
-        # exit()
-        # mixed_qkv = rearrange(mixed_qkv, "b l d -> b d l")
 
+        # mixed_qkv = rearrange(mixed_qkv, "b l d -> b d l")
         # 2. Convolution sequence transformation
         conv_weights = self.conv1d.weight.view(
             self.conv1d.weight.size(0), self.conv1d.weight.size(2)
@@ -506,9 +477,6 @@ class Qwen3GatedDeltaNet(nn.Module):
         core_attn_out = core_attn_out.reshape(*core_attn_out.shape[:-2], -1)
 
         output, _ = self.out_proj(core_attn_out)
-        # if self.attn_tp_rank  == 0:
-        #     torch.save(output, "tp2_out_proj.pt")
-        # exit()
         return output
 
 
@@ -649,12 +617,6 @@ class Qwen3HybridAttentionDecoderLayer(nn.Module):
             is_neox_style=True,
             dtype=torch.get_default_dtype(),  # see impl of get_rope
         )
-        # print(self.total_num_heads)
-        # print(self.total_num_heads * (1 + self.attn_output_gate))
-        # print(self.total_num_kv_heads)
-        # 24
-        # 48 
-        # 3
         self.qkv_proj = QKVParallelLinear(
             config.hidden_size,
             self.head_dim,

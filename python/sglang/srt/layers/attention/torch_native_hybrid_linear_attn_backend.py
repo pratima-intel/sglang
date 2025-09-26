@@ -400,12 +400,6 @@ class MambaAttnBackend(AttentionBackend):
         conv_states, ssm_states = self.req_to_token_pool.get_mamba_params(layer_id)
         query_start_loc = self.forward_metadata.query_start_loc
         cache_indices = self.forward_metadata.mamba_cache_indices
-        # print(mixed_qkv.shape)
-        # print("self.attn_tp_rank ",self.attn_tp_rank, "-", mixed_qkv[:, 511:768])
-        # print("self.attn_tp_rank ",self.attn_tp_rank, "-", mixed_qkv[:, 1279:1536])
-        # print("self.attn_tp_rank ",self.attn_tp_rank, "-", mixed_qkv[:, 2559:3072])
-        # exit()
-        # mixed_qkv q[0:512] padq[511:768] k[768:1280] padk[1280:1536] v[1280:2560] padv[2560:3072]
         mixed_qkv, new_conv_states = torch.ops.sgl_kernel.causal_conv1d_update_cpu(
             mixed_qkv.unsqueeze(1).transpose(1,2),
             conv_states[cache_indices],
@@ -434,12 +428,6 @@ class MambaAttnBackend(AttentionBackend):
             ],
             dim=-1,
         )
-#         print(query.shape)
-#         print(key.shape)
-#         print(value.shape)
-# torch.Size([1, 768])
-# torch.Size([1, 768])
-# torch.Size([1, 1536])
         # Reshape from [l, h*d] to [1, l, h, d]
         seq_len = query.shape[0]
         num_heads = query.shape[1] // head_k_dim
@@ -450,14 +438,6 @@ class MambaAttnBackend(AttentionBackend):
         beta = b.sigmoid()
         # g = torch_gdn_gating(A_log, a, dt_bias)
         g = self.fused_gdn_gating(A_log, a, dt_bias)
-        # if self.attn_tp_rank == 2:
-        #     g = g[:,0:8]
-        #     l_qk = [-float("inf"),-float("inf"),-float("inf"),-float("inf")]
-        #     qk = []
-        #     for i in range(g.size(0)):
-        #         qk.append(l_qk)
-        #     pad_qk = torch.tensor(qk).to(g.dtype)
-        #     g = torch.cat([g, pad_qk], dim=-1)
         if num_value_heads // num_heads > 1:
             query = query.repeat_interleave(num_value_heads // num_heads, dim=2)
             key = key.repeat_interleave(num_value_heads // num_heads, dim=2)
@@ -529,20 +509,8 @@ class MambaAttnBackend(AttentionBackend):
             has_initial_states = forward_batch.extend_prefix_lens > 0
             conv_states_to_use = conv_states
         start_q = 0
-        # print("self.attn_tp_rank",self.attn_tp_rank, mixed_qkv.shape)
         for i in range(batch_size):
             end_q = query_start_loc[i + 1]
-            # print("self.attn_tp_rank",self.attn_tp_rank, "-", mixed_qkv[start_q:end_q].transpose(0, 1).shape)
-            # print("self.attn_tp_rank",self.attn_tp_rank, "-", mixed_qkv[start_q:end_q].transpose(0, 1))
-            # print("self.attn_tp_rank ",self.attn_tp_rank, "-", mixed_qkv[start_q:end_q][:, 2048:])
-            # print("self.attn_tp_rank ",self.attn_tp_rank, "-", mixed_qkv[start_q:end_q][:, 2048:])
-            # if self.attn_tp_rank == 2:
-                # print(start_q)
-                # print(end_q)
-                # print("self.attn_tp_rank ",self.attn_tp_rank, "-", mixed_qkv[start_q:end_q].sum())
-                # print("self.attn_tp_rank ",self.attn_tp_rank, "-", mixed_qkv[start_q:end_q][:, 511:768])
-                # print("self.attn_tp_rank ",self.attn_tp_rank, "-", mixed_qkv[start_q:end_q][:, 1279:1536])
-                # print("self.attn_tp_rank ",self.attn_tp_rank, "-", mixed_qkv[start_q:end_q][:, 2559:3072])
             mixed_qkv_i, final_states = causal_conv1d_ref(
                 mixed_qkv[start_q:end_q].transpose(0, 1),
                 conv_weights,
@@ -557,22 +525,15 @@ class MambaAttnBackend(AttentionBackend):
                     conv_states.dtype, copy=False
                 )
             start_q = end_q
-        # exit()
 
         key_split_dim = key_dim // attn_tp_size
         value_split_dim = value_dim // attn_tp_size
-        # print(key_split_dim) 768
-        # print(value_split_dim) 1536
 
         query, key, value = torch.split(
             mixed_qkv,
             [key_split_dim, key_split_dim, value_split_dim],
             dim=-1,
         )
-        # if self.attn_tp_rank == 2:
-        #     query = query[:, 0:512]
-        #     key = key[:, 0:512]
-        #     value = value[:, 0:1024]
 
         actual_seq_len = query.shape[0]
         num_heads = query.shape[1] // head_k_dim
@@ -585,14 +546,6 @@ class MambaAttnBackend(AttentionBackend):
         beta = b.sigmoid()
         # g = torch_gdn_gating(A_log, a, dt_bias)
         g = self.fused_gdn_gating(A_log, a, dt_bias)
-        # if self.attn_tp_rank == 2:
-        #     g = g[:,0:8]
-        #     l_qk = [-float("inf"),-float("inf"),-float("inf"),-float("inf")]
-        #     qk = []
-        #     for i in range(g.size(0)):
-        #         qk.append(l_qk)
-        #     pad_qk = torch.tensor(qk).to(g.dtype)
-        #     g = torch.cat([g, pad_qk], dim=-1)
         g = g.unsqueeze(0)
         beta = beta.unsqueeze(0)
 
