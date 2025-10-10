@@ -564,7 +564,7 @@ class ModelRunner:
                         f"Invalid attention backend for MLA: {server_args.attention_backend}"
                     )
             else:
-                if server_args.attention_backend != "intel_amx":
+                if server_args.attention_backend not in ["intel_amx","nsa"]:
                     raise ValueError(
                         "MLA optimization not supported on CPU except for intel_amx backend."
                     )

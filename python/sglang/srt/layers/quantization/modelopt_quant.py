@@ -51,26 +51,32 @@ if TYPE_CHECKING:
 
 if is_cuda():
     from sgl_kernel import scaled_fp4_quant
+    try:
+        from flashinfer import mm_fp4 as fp4_gemm
+        from flashinfer import reorder_rows_for_gated_act_gemm, shuffle_matrix_sf_a
 
-try:
-    from flashinfer import mm_fp4 as fp4_gemm
-    from flashinfer import reorder_rows_for_gated_act_gemm, shuffle_matrix_sf_a
+        enable_flashinfer_fp4_gemm = True
+    except ImportError:
+        if is_cuda():
+            from sgl_kernel import cutlass_scaled_fp4_mm as fp4_gemm
+        else:
+            fp4_gemm = None
+        enable_flashinfer_fp4_gemm = False
+        reorder_rows_for_gated_act_gemm = None
+        shuffle_matrix_a = None
+        shuffle_matrix_sf_a = None
+    try:
+        from flashinfer.fused_moe import cutlass_fused_moe as flashinfer_cutlass_fused_moe
+    except ImportError:
+        flashinfer_cutlass_fused_moe = None
 
-    enable_flashinfer_fp4_gemm = True
-except ImportError:
-    if is_cuda():
-        from sgl_kernel import cutlass_scaled_fp4_mm as fp4_gemm
-    else:
+else:
         fp4_gemm = None
-    enable_flashinfer_fp4_gemm = False
-    reorder_rows_for_gated_act_gemm = None
-    shuffle_matrix_a = None
-    shuffle_matrix_sf_a = None
-
-try:
-    from flashinfer.fused_moe import cutlass_fused_moe as flashinfer_cutlass_fused_moe
-except ImportError:
-    flashinfer_cutlass_fused_moe = None
+        enable_flashinfer_fp4_gemm = False
+        reorder_rows_for_gated_act_gemm = None
+        shuffle_matrix_a = None
+        shuffle_matrix_sf_a = None
+        flashinfer_cutlass_fused_moe = None
 
 # Initialize logger for the module
 logger = logging.getLogger(__name__)

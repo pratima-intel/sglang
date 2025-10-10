@@ -1125,7 +1125,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
         extend_lens_tensor: torch.Tensor,
         prefix_tensors: list[torch.Tensor],
     ):
-        if support_triton(global_server_args_dict.get("attention_backend")):
+        if False and support_triton(global_server_args_dict.get("attention_backend")):
             prefix_pointers = torch.tensor(
                 [t.data_ptr() for t in prefix_tensors], device=self.device
             )

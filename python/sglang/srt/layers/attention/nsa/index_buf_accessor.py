@@ -60,7 +60,7 @@ class GetK:
 
         # flat_indices: (num_pages, num_k_bytes_per_page), int32, element := an index into flat_buf that we want to access
         flat_indices = (page_indices * buf_numel_per_page)[:, None] + torch.arange(
-            num_k_bytes_per_page, dtype=torch.int32, device="cuda"
+            num_k_bytes_per_page, dtype=torch.int32, device="cpu"
         )[None, :]
         flat_indices = flat_indices.flatten()[: seq_len * num_k_bytes_per_token]
 
@@ -109,7 +109,7 @@ class GetS:
         flat_buf = buf.flatten()
         flat_indices = (
             (page_indices * buf_numel_per_page)[:, None]
-            + torch.arange(num_s_bytes_per_page, dtype=torch.int32, device="cuda")[
+            + torch.arange(num_s_bytes_per_page, dtype=torch.int32, device="cpu")[
                 None, :
             ]
             + s_offset_in_page
@@ -161,7 +161,7 @@ class SetK:
         flat_indices = (
             (loc_page_index * buf_numel_per_page)[:, None]
             + (loc_token_offset_in_page * num_k_bytes_per_token)[:, None]
-            + torch.arange(num_k_bytes_per_token, dtype=torch.int32, device="cuda")[
+            + torch.arange(num_k_bytes_per_token, dtype=torch.int32, device="cpu")[
                 None, :
             ]
         )
@@ -213,7 +213,7 @@ class SetS:
             (loc_page_index * buf_numel_per_page)[:, None]
             + s_offset_in_page
             + (loc_token_offset_in_page * num_s_bytes_per_token)[:, None]
-            + torch.arange(num_s_bytes_per_token, dtype=torch.int32, device="cuda")[
+            + torch.arange(num_s_bytes_per_token, dtype=torch.int32, device="cpu")[
                 None, :
             ]
         )
@@ -242,7 +242,7 @@ class SetKAndS:
             ), f"{buf=} {buf_cloned=} {kwargs['loc'].to_list()=}"
             return
 
-        cls.triton(*args, **kwargs, buf=buf)
+        cls.vanilla(*args, **kwargs, buf=buf)
 
     @classmethod
     def vanilla(cls, pool, buf, loc, index_k, index_k_scale):

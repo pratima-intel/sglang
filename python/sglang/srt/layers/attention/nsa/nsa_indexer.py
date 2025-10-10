@@ -9,7 +9,7 @@ from einops import rearrange
 from torch import nn
 
 from sglang.srt.custom_op import CustomOp
-from sglang.srt.utils import add_prefix, align, is_cuda, is_hip, is_npu
+from sglang.srt.utils import add_prefix, align, is_cuda, is_hip, is_npu, is_cpu
 
 if is_cuda():
     import deep_gemm
@@ -71,13 +71,16 @@ class BaseIndexerMetadata(ABC):
 
 def rotate_activation(x: torch.Tensor) -> torch.Tensor:
     assert x.dtype == torch.bfloat16
-    from fast_hadamard_transform import hadamard_transform
+    # from fast_hadamard_transform import hadamard_transform
 
     hidden_size = x.size(-1)
     assert (
         hidden_size & (hidden_size - 1)
     ) == 0, "Hidden size must be a power of 2 for Hadamard transform."
-    return hadamard_transform(x, scale=hidden_size**-0.5)
+    import scipy
+    scale=hidden_size**-0.5
+    return F.linear(x, torch.tensor(scipy.linalg.hadamard(hidden_size)).to(torch.bfloat16)) * scale
+    # return hadamard_transform(x, scale=hidden_size**-0.5)
 
 
 class V32LayerNorm(nn.Module):
@@ -97,6 +100,190 @@ class V32LayerNorm(nn.Module):
             x.float(), (self.dim,), self.weight, self.bias, self.eps
         ).type_as(x)
 
+import math
+
+# def act_quant_py(
+#     X: torch.Tensor,            # shape (M, N)
+#     group_size: int,
+#     round_scale: bool,
+#     fp8_max_inv: float,
+#     fp8_min: float,
+#     fp8_max: float,
+#     blk_m: int = 32,
+# ):  
+#     print(X.shape)
+#     M, N = X.shape
+#     device = X.device
+#     dtype = X.dtype
+
+#     n_groups = math.ceil(N / group_size)
+#     Y = torch.empty_like(X)
+#     S = torch.empty((M, n_groups), dtype=torch.float32, device=device)
+
+#     for pid_m in range(math.ceil(M / blk_m)):
+#         row_start = pid_m * blk_m
+#         row_end = min((pid_m + 1) * blk_m, M)
+#         cur_blk_m = row_end - row_start  # 当前这个 block 的行数
+
+#         for pid_n in range(n_groups):
+#             col_start = pid_n * group_size
+#             col_end = min((pid_n + 1) * group_size, N)
+#             cur_grp = col_end - col_start  # 当前这个组的列数
+
+#             # 切出子块
+#             X_block = X[row_start:row_end, col_start:col_end]  # shape (cur_blk_m, cur_grp)
+
+#             # 计算每行绝对值最大值
+#             amax = X_block.abs().max(dim=1).values  # shape (cur_blk_m,)
+#             amax = torch.maximum(amax, torch.full_like(amax, 1e-4))
+
+#             # 计算 scale
+#             if round_scale:
+#                 s_local = torch.round(amax * fp8_max_inv) / fp8_max_inv
+#             else:
+#                 s_local = amax * fp8_max_inv
+
+#             # 存 S
+#             # s_local 的形状是 (cur_blk_m,)
+#             S[row_start:row_end, pid_n] = s_local.to(torch.float32)
+
+#             # 量化
+#             # 扩展 s_local 到 (cur_blk_m, cur_grp)
+#             s_expand = s_local.unsqueeze(1).expand(cur_blk_m, cur_grp)
+#             y_block = X_block / s_expand
+#             y_block = torch.clamp(y_block, fp8_min, fp8_max)
+
+#             # 写回 Y
+#             # 注意：Y[row_start:row_end, col_start:col_end] 的子矩阵的形状就是 (cur_blk_m, cur_grp)
+#             Y[row_start:row_end, col_start:col_end] = y_block.to(dtype)
+
+#     return Y, S
+def act_quant_py(
+    x: torch.Tensor,
+    block_size: int = 128,
+    scale_fmt: Optional[str] = None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Quantizes the input tensor `x` using block-wise FP8 quantization.
+
+    Args:
+        x (torch.Tensor): Input tensor, must be contiguous and last dim divisible by block_size.
+        block_size (int): Block size for quantization (default: 128).
+        scale_fmt (Optional[str]): If not None, enables rounding of scale (simulated).
+
+    Returns:
+        Tuple[torch.Tensor, torch.Tensor]:
+            - Quantized tensor in torch.float8_e4m3fn.
+            - Scale tensor in torch.float32, shape [..., N // block_size].
+    """
+    assert x.is_contiguous(), "Input tensor must be contiguous"
+    assert x.size(-1) % block_size == 0, f"Last dim {x.size(-1)} not divisible by block_size={block_size}"
+
+    # Constants for FP8 E4M3
+    FP8_MAX = 448.0
+    FP8_MIN = -448.0
+    EPS = 1e-4  # to avoid division by zero
+
+    # Reshape to [..., num_blocks, block_size]
+    original_shape = x.shape
+    M = x.numel() // x.size(-1)
+    N = x.size(-1)
+    x_reshaped = x.view(M, N)
+    num_blocks = N // block_size
+    x_blocks = x_reshaped.view(M, num_blocks, block_size)  # [M, num_blocks, block_size]
+
+    # Compute absolute max per block (along last dim)
+    amax = torch.amax(torch.abs(x_blocks), dim=-1)  # [M, num_blocks]
+    amax = torch.clamp(amax, min=EPS)
+
+    # Compute scale: s = amax / FP8_MAX  --> so that x / s fits in [-FP8_MAX, FP8_MAX]
+    scale = amax / FP8_MAX  # [M, num_blocks]
+
+    if scale_fmt is not None:
+        # Simulate "fast_round_scale": round scale to nearest representable?
+        # Since we don't have the exact function, we round to nearest multiple of a small epsilon.
+        # Alternatively, you can quantize scale itself, but here we just round to 6 decimals as approximation.
+        scale = torch.round(scale * 1e6) / 1e6
+
+    # Avoid in-place modification; expand scale to match x_blocks
+    scale_expanded = scale.unsqueeze(-1)  # [M, num_blocks, 1]
+
+    # Quantize: x_quant = clamp(x / scale, FP8_MIN, FP8_MAX)
+    x_dequantized = x_blocks / scale_expanded  # [M, num_blocks, block_size]
+    x_clamped = torch.clamp(x_dequantized, min=FP8_MIN, max=FP8_MAX)
+
+    # Convert to FP8
+    # Note: PyTorch requires conversion from float32 to float8
+    y_fp8 = x_clamped.to(torch.float8_e4m3fn)
+
+    # Reshape back
+    y = y_fp8.view(original_shape)
+    s = scale.view(*original_shape[:-1], num_blocks).to(torch.float32)
+
+    return y, s
+
+def fp8_index_py(
+    q: torch.Tensor,
+    q_s: torch.Tensor,
+    k: torch.Tensor,
+    k_s: torch.Tensor,
+) -> torch.Tensor:
+    """
+    Perform index score computation using FP8-like quantized inputs.
+
+    Args:
+        q (torch.Tensor): FP8 query tensor of shape [B, M, H, D]
+        q_s (torch.Tensor): Query scales of shape [B, M, H] (float32)
+        k (torch.Tensor): FP8 key tensor of shape [B, N, D]
+        k_s (torch.Tensor): Key scales of shape [B, N] (float32)
+
+    Returns:
+        o (torch.Tensor): Index scores of shape [B, M, N] (float32)
+    """
+    # Validate shapes and dtypes
+    assert q.dtype == torch.float8_e4m3fn, "q must be in torch.float8_e4m3fn"
+    assert k.dtype == torch.float8_e4m3fn, "k must be in torch.float8_e4m3fn"
+    assert q.is_contiguous() and k.is_contiguous()
+    assert q_s.is_contiguous() and k_s.is_contiguous()
+
+    B, M, H, D = q.shape
+    B_k, N, D_k = k.shape
+    assert (B_k, D_k) == (B, D), f"Shape mismatch: q has D={D}, k has D={D_k}"
+    assert q_s.shape == (B, M, H), f"q_s shape {q_s.shape} != (B, M, H) = ({B}, {M}, {H})"
+    assert k_s.shape == (B, N), f"k_s shape {k_s.shape} != (B, N) = ({B}, {N})"
+
+    # Step 1: Dequantize q and k to float32 for computation
+    # Since FP8 tensors cannot be directly used in matmul in most PyTorch versions,
+    # we convert to float32 first.
+    q_f32 = q.to(torch.float32)  # [B, M, H, D]
+    k_f32 = k.to(torch.float32)  # [B, N, D]
+
+    # Step 2: Compute logits = k @ q^T  --> [B, N, H] for each (m)
+    # We need: for each (b, m), compute k[b] @ q[b, m].T  --> [N, H]
+    # So: q reshaped to [B, M, D, H] for batch matmul with k [B, N, D]
+    q_T = q_f32.transpose(-1, -2)  # [B, M, D, H]
+    # Use einsum or bmm: (B, N, D) x (B, M, D, H) -> we need per m
+    # Better: expand k to [B, M, N, D] and q to [B, M, D, H], then matmul
+    k_exp = k_f32.unsqueeze(1).expand(-1, M, -1, -1)        # [B, M, N, D]
+    q_exp = q_f32                                           # [B, M, H, D]
+    # Compute: [B, M, N, D] @ [B, M, D, H] -> [B, M, N, H]
+    logits = torch.matmul(k_exp, q_exp.transpose(-1, -2))   # [B, M, N, H]
+
+    # Step 3: ReLU (max(x, 0))
+    logits = torch.relu(logits)  # [B, M, N, H]
+
+    # Step 4: Multiply by q_s per head: [B, M, N, H] * [B, M, H] -> broadcast
+    q_s_exp = q_s.unsqueeze(2)  # [B, M, 1, H]
+    logits = logits * q_s_exp   # [B, M, N, H]
+
+    # Step 5: Sum over heads (H)
+    logits_sum = logits.sum(dim=-1)  # [B, M, N]
+
+    # Step 6: Multiply by k_s: [B, M, N] * [B, N] -> broadcast
+    k_s_exp = k_s.unsqueeze(1)  # [B, 1, N]
+    o = logits_sum * k_s_exp    # [B, M, N]
+
+    return o
 
 class Indexer(CustomOp):
     def __init__(
@@ -255,8 +442,10 @@ class Indexer(CustomOp):
             k_rope, _ = torch.split(
                 key, [self.rope_head_dim, self.head_dim - self.rope_head_dim], dim=-1
             )
-
-        q_rope, k_rope = self.rotary_emb(positions, q_rope, k_rope)
+        # torch.Size([7, 64, 64])
+        # torch.Size([7, 64])
+        q_rope, k_rope = self.rotary_emb(positions, q_rope, k_rope.unsqueeze(1))
+        k_rope = k_rope.view([k_rope.size(0), -1])
 
         query[..., : self.rope_head_dim] = q_rope
         key[..., : self.rope_head_dim] = k_rope
@@ -408,8 +597,8 @@ class Indexer(CustomOp):
         topk: int,
         layer_id: int,
     ) -> Optional[torch.Tensor]:
-        if not is_npu():
-            from sglang.srt.layers.attention.nsa.tilelang_kernel import fp8_index
+        # if not is_npu():
+        #     from sglang.srt.layers.attention.nsa.tilelang_kernel import fp8_index
 
         page_size = forward_batch.token_to_kv_pool.page_size
         assert page_size == 64, "only support page size 64"
@@ -427,7 +616,7 @@ class Indexer(CustomOp):
             forward_batch.req_pool_indices, :
         ]
         strided_indices = torch.arange(
-            0, block_tables.shape[-1], page_size, device="cuda"
+            0, block_tables.shape[-1], page_size, device="cpu"
         )
         block_tables = block_tables[:, strided_indices] // page_size
 
@@ -462,7 +651,7 @@ class Indexer(CustomOp):
             k_fp8 = k_fp8.view(torch.float8_e4m3fn).unsqueeze(0).contiguous()
             k_scale = k_scale.view(torch.float32).squeeze(-1).unsqueeze(0).contiguous()
 
-            index_score = fp8_index(
+            index_score = fp8_index_py(
                 q_fp8_partial,
                 weights_partial,
                 k_fp8,
@@ -502,8 +691,8 @@ class Indexer(CustomOp):
         forward_batch: ForwardBatch,
         layer_id: int,
     ) -> Optional[torch.Tensor]:
-        if not is_npu():
-            from sglang.srt.layers.attention.nsa.tilelang_kernel import act_quant
+        # if not is_npu():
+        #     from sglang.srt.layers.attention.nsa.tilelang_kernel import act_quant
 
         if TYPE_CHECKING:
             assert isinstance(forward_batch.token_to_kv_pool, NSATokenToKVPool)
@@ -538,8 +727,10 @@ class Indexer(CustomOp):
                 k_fp8, k_scale = act_quant(key, self.block_size, self.scale_fmt)
             current_stream.wait_stream(self.alt_stream)
         else:
-            q_fp8, q_scale = act_quant(query, self.block_size, self.scale_fmt)
-            k_fp8, k_scale = act_quant(key, self.block_size, self.scale_fmt)
+            # q_fp8, q_scale = act_quant(query, self.block_size, self.scale_fmt)
+            # k_fp8, k_scale = act_quant(key, self.block_size, self.scale_fmt)
+            q_fp8, q_scale = act_quant_py(query, self.block_size, self.scale_fmt)
+            k_fp8, k_scale = act_quant_py(key, self.block_size, self.scale_fmt)
 
         # k_fp8: (seq_len, head_dim) fp8_e4m3fn
         # k_buffer: (num_total_tokens + page_size, head_dim) fp8_e4m3fn
@@ -586,6 +777,16 @@ class Indexer(CustomOp):
         return topk_result
 
     def forward_cuda(
+        self,
+        x: torch.Tensor,
+        q_lora: torch.Tensor,
+        positions: torch.Tensor,
+        forward_batch: ForwardBatch,
+        layer_id: int,
+    ) -> Optional[torch.Tensor]:
+        return self._forward(x, q_lora, positions, forward_batch, layer_id)
+
+    def forward_cpu(
         self,
         x: torch.Tensor,
         q_lora: torch.Tensor,

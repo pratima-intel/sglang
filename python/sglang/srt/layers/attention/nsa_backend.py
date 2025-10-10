@@ -32,21 +32,146 @@ if TYPE_CHECKING:
 
 _is_hip = is_hip()
 
-if _is_hip:
-    try:
-        from aiter import (
-            flash_attn_varlen_func,
-            mha_batch_prefill_func,
-            paged_attention_ragged,
-        )
-        from aiter.mla import mla_decode_fwd, mla_prefill_fwd
-    except ImportError:
-        print(
-            "aiter is AMD specific kernel library. Please make sure aiter is installed on your AMD device."
-        )
-else:
-    from sgl_kernel.flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
+# if _is_hip:
+#     try:
+#         from aiter import (
+#             flash_attn_varlen_func,
+#             mha_batch_prefill_func,
+#             paged_attention_ragged,
+#         )
+#         from aiter.mla import mla_decode_fwd, mla_prefill_fwd
+#     except ImportError:
+#         print(
+#             "aiter is AMD specific kernel library. Please make sure aiter is installed on your AMD device."
+#         )
+# else:
+#     from sgl_kernel.flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
 
+def tilelang_sparse_fwd_pytorch(
+    q: torch.Tensor,          # [q_len, H, D_total]
+    kv: torch.Tensor,         # [num_pages, G, D_total]
+    indices: torch.Tensor,    # [q_len, G, topk], int32, -1 means invalid
+    sm_scale: float,
+    d_v: int = 512,           # output dim = d_v, so D_total = d_v + tail_dim
+) -> torch.Tensor:            # [q_len, H, d_v]
+    """
+    PyTorch equivalent of sparse_attention_fwd_kernel_v2.
+    
+    Assumptions:
+      - batch_size = 1 (unsqueeze(0) in original call)
+      - kv_group = G (usually 1 or H//G)
+      - indices may contain -1 for padding (masked out)
+    """
+    # Add batch dim to match kernel expectation
+    q = q.unsqueeze(0)          # [1, q_len, H, D_total]
+    kv = kv.unsqueeze(0)        # [1, num_pages, G, D_total]
+    indices = indices.unsqueeze(0)  # [1, q_len, G, topk]
+
+    B, q_len, H, D_total = q.shape
+    _, num_pages, G, _ = kv.shape
+    _, _, _, topk = indices.shape
+    tail_dim = D_total - d_v
+    assert d_v == D_total - tail_dim
+
+    # Validate
+    assert B == 1, "Only batch=1 supported in this translation"
+    assert kv.dtype == q.dtype, "Q and KV must have same dtype"
+    assert indices.dtype in (torch.int32, torch.int64)
+
+    # Step 1: Gather KV using indices
+    # indices: [1, q_len, G, topk] -> expand to [1, q_len, G, topk, D_total]
+    # Use advanced indexing: kv[b, indices[b, q, g, k], g, :]
+    b_idx = torch.arange(B, device=indices.device)[:, None, None, None]  # [1,1,1,1]
+    g_idx = torch.arange(G, device=indices.device)[None, None, :, None]  # [1,1,G,1]
+    
+    # Clamp negative indices to 0 (but mask later)
+    valid_mask = indices >= 0  # [1, q_len, G, topk]
+    safe_indices = torch.where(valid_mask, indices, torch.zeros_like(indices))
+
+    # Gather KV: [1, q_len, G, topk, D_total]
+    kv_gathered = kv[b_idx, safe_indices, g_idx, :]  # advanced indexing
+
+    # Step 2: Split Q and KV into V and K parts
+    q_v = q[..., :d_v]        # [1, q_len, H, d_v]
+    q_k = q[..., d_v:]        # [1, q_len, H, tail_dim]
+
+    kv_v = kv_gathered[..., :d_v]   # [1, q_len, G, topk, d_v]
+    kv_k = kv_gathered[..., d_v:]   # [1, q_len, G, topk, tail_dim]
+
+    # Step 3: Compute attention scores
+    # We need: for each (b, q, h), compute over (g, k)
+    # But H may not equal G -> use head grouping: h // (H // G) = g
+    if H != G:
+        assert H % G == 0, "H must be divisible by G"
+        group_size = H // G
+        # Expand kv to match heads: [1, q_len, H, topk, ...]
+        kv_v = kv_v.unsqueeze(2).expand(-1, -1, -1, group_size, -1, -1).flatten(2, 3)  # [1, q_len, H, topk, d_v]
+        kv_k = kv_k.unsqueeze(2).expand(-1, -1, -1, group_size, -1, -1).flatten(2, 3)  # [1, q_len, H, topk, tail_dim]
+        valid_mask = valid_mask.unsqueeze(2).expand(-1, -1, -1, group_size, -1).flatten(2, 3)  # [1, q_len, H, topk]
+
+    # Compute QK^T: [1, q_len, H, topk]
+    # score = (q_v @ kv_v^T + q_k @ kv_k^T) * sm_scale
+    score_v = torch.einsum('bqhd,bqhtd->bqht', q_v, kv_v)  # [B, q_len, H, topk]
+    if tail_dim > 0:
+        score_k = torch.einsum('bqhd,bqhtd->bqht', q_k, kv_k)
+        score = (score_v + score_k) * sm_scale
+    else:
+        score = score_v * sm_scale
+
+    # Apply mask: invalid positions -> -inf
+    score = torch.where(valid_mask, score, torch.full_like(score, float('-inf')))
+
+    # Step 4: Softmax
+    # Use log-sum-exp trick for numerical stability (like kernel)
+    max_score = torch.amax(score, dim=-1, keepdim=True)  # [B, q_len, H, 1]
+    exp_score = torch.exp2(score - max_score)  # kernel uses exp2!
+    exp_score = torch.where(valid_mask, exp_score, torch.zeros_like(exp_score))
+    sum_exp = torch.sum(exp_score, dim=-1, keepdim=True)  # [B, q_len, H, 1]
+
+    # Avoid division by zero
+    sum_exp = torch.clamp(sum_exp, min=1e-10)
+
+    # Step 5: Weighted sum of V
+    weighted_v = exp_score.unsqueeze(-1) * kv_v  # [B, q_len, H, topk, d_v]
+    output = torch.sum(weighted_v, dim=-2) / sum_exp  # [B, q_len, H, d_v]
+
+    # Remove batch dim
+    return output.squeeze(0)  # [q_len, H, d_v]
+def ref_sparse_mla_fwd_interface(q, kv, indices, sm_scale=None, is_casual=True):
+    q = q.float()
+    kv = kv.float()
+    indices = indices.transpose(1, 2)
+    b, sq, h, dim_q = q.shape
+    b, sk, g, _ = kv.shape
+
+    assert kv.shape[-1] == 576, "you should assign dim otherwise"
+    dim = 512
+    k = kv
+    v = kv[..., :dim]
+
+    b, _, _, dim_v = v.shape
+    g_index = g
+    h_index = h // g
+    compressed_casual_mask = torch.arange(
+        0, sq, dtype=torch.int32, device="cpu").view(-1, 1) >= torch.arange(
+            1 - 1, sk * 1, 1, dtype=torch.int32, device="cpu").view(1, -1)
+
+    mask = q.new_zeros(b, g_index, sq, sk + 1, dtype=torch.bool).scatter(3, indices.long(), 1)
+    mask = mask[..., :-1]
+    mask = mask & compressed_casual_mask.view(1, 1, sq, sk)
+    mask[:, :, :1 - 1, 0] = True
+    mask = mask.view(b, g_index, 1, sq, sk)
+
+    q = q.view(b, sq, g, -1, dim_q)
+    score = torch.einsum("bmghd,bngd->bghmn", q, k)
+    sm_scale = dim_q**-0.5 if sm_scale is None else sm_scale
+    score = score.masked_fill(~mask, float("-inf")).mul(sm_scale)
+    p = score.softmax(dim=-1)
+    p = p.view(b, g_index, h_index, -1, sq, sk)
+    p = p.view(b, g, -1, sq, sk)
+    o = torch.einsum("bghmn,bngd->bmghd", p.type(v.dtype), v)
+    o = o.reshape(b, sq, h, dim_v)
+    return o.to(torch.bfloat16)
 
 @dataclass(frozen=True)
 class NSAFlashMLAMetadata:
@@ -134,7 +259,7 @@ class NSAIndexerMetadata(BaseIndexerMetadata):
 
 
 def compute_cu_seqlens(seqlens: torch.Tensor) -> torch.Tensor:
-    assert seqlens.dtype == torch.int32 and seqlens.is_cuda
+    # assert seqlens.dtype == torch.int32 and seqlens.is_cuda
     return torch.nn.functional.pad(
         torch.cumsum(seqlens, dim=0, dtype=torch.int32), (1, 0)
     )
@@ -809,6 +934,15 @@ class NativeSparseAttnBackend(AttentionBackend):
         page_table_1: torch.Tensor,
         sm_scale: float,
     ) -> torch.Tensor:
+        return tilelang_sparse_fwd_pytorch(
+            q=q_all,
+            kv=kv_cache,
+            indices=page_table_1.unsqueeze(1),
+            sm_scale=sm_scale,
+            d_v=v_head_dim,
+        )
+
+        return ref_sparse_mla_fwd_interface(q_all, kv_cache, page_table_1, sm_scale=sm_scale, is_casual=True)
         from sglang.srt.layers.attention.nsa.tilelang_kernel import tilelang_sparse_fwd
 
         return tilelang_sparse_fwd(

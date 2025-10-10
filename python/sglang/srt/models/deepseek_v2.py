@@ -1580,7 +1580,11 @@ class DeepseekV2AttentionMLA(nn.Module):
                 q_nope_val, self.w_kc, q_nope_scale, self.w_scale, torch.bfloat16
             )
         else:
-            q_nope_out = torch.bmm(q_nope.transpose(0, 1), self.w_kc)
+            # print(q_nope.dtype)
+            # print(q_nope.shape)
+            # print( self.w_kc.dtype)
+            # print( self.w_kc.shape)
+            q_nope_out = torch.bmm(q_nope.transpose(0, 1), self.w_kc.transpose(-2, -1))
 
         q_nope_out = q_nope_out.transpose(0, 1)
 
@@ -1736,7 +1740,7 @@ class DeepseekV2AttentionMLA(nn.Module):
             )
             torch.bmm(
                 attn_output.transpose(0, 1),
-                self.w_vc,
+                self.w_vc.transpose(-2, -1),
                 out=attn_bmm_output.view(
                     -1, self.num_local_heads, self.v_head_dim
                 ).transpose(0, 1),

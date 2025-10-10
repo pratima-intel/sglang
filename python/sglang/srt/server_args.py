@@ -856,8 +856,8 @@ class ServerArgs:
                 logger.warning("Set nsa attention backend for DeepSeek NSA.")
 
             if not is_npu():
-                self.enable_dp_attention = True
-                self.dp_size = self.tp_size
+                self.enable_dp_attention = False
+                # self.dp_size = self.tp_size
                 logger.warning("DP attention is enabled for DeepSeek NSA.")
 
                 self.page_size = 64
@@ -869,17 +869,17 @@ class ServerArgs:
                 # For Hopper, we support both bf16 and fp8 kv cache; for Blackwell, we support fp8 only currently
                 import torch
 
-                major, _ = torch.cuda.get_device_capability()
-                if major >= 10:
-                    self.kv_cache_dtype = "fp8_e4m3"
-                    logger.warning("Setting KV cache dtype to fp8.")
+                # major, _ = torch.cuda.get_device_capability()
+                # if major >= 10:
+                #     self.kv_cache_dtype = "fp8_e4m3"
+                #     logger.warning("Setting KV cache dtype to fp8.")
 
-                if self.kv_cache_dtype == "fp8_e4m3":
-                    self.nsa_prefill = "flashmla_decode"
-                    self.nsa_decode = "flashmla_decode"
-                    logger.warning(
-                        "Setting NSA backend to flashmla_decode for FP8 KV Cache."
-                    )
+                # if self.kv_cache_dtype == "fp8_e4m3":
+                #     self.nsa_prefill = "flashmla_decode"
+                #     self.nsa_decode = "flashmla_decode"
+                #     logger.warning(
+                #         "Setting NSA backend to flashmla_decode for FP8 KV Cache."
+                #     )
 
                 # Logging env vars for NSA
                 from sglang.srt.layers.attention.nsa.utils import (
@@ -2996,6 +2996,8 @@ class ServerArgs:
         # Skip validation if chunked prefill is disabled (i.e., size <= 0).
         # Skip validation if disaggregation mode is decode.
         if self.chunked_prefill_size > 0 and self.disaggregation_mode != "decode":
+            print(self.chunked_prefill_size)
+            print(self.page_size)
             assert (
                 self.chunked_prefill_size % self.page_size == 0
             ), "chunked_prefill_size must be divisible by page_size"

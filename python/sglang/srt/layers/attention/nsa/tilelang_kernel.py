@@ -37,7 +37,7 @@ def fast_round_scale(amax, fp8_max_inv):
     return fast_pow2(fast_log2_ceil(amax * fp8_max_inv))
 
 
-@tilelang.jit(pass_configs=pass_configs)
+@tilelang.jit(target="c")
 def act_quant_kernel(
     N, in_dtype=BF16, out_dtype=FP8, scale_dtype=FP32, round_scale=False
 ):
@@ -115,7 +115,7 @@ def act_quant(
     return y, s
 
 
-@tilelang.jit(out_idx=[4], pass_configs=pass_configs)
+@tilelang.jit(out_idx=[4], target="c")
 def fp8_index_kernel(h: int, d: int, clear_accum=True):
     b = T.symbolic("b")
     m = T.symbolic("m")
@@ -198,10 +198,11 @@ def fp8_index(
 
 @tilelang.jit(
     out_idx=[-1],
-    pass_configs={
-        tilelang.PassConfigKey.TL_DISABLE_TMA_LOWER: True,
-        tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True,
-    },
+    # pass_configs={
+    #     tilelang.PassConfigKey.TL_DISABLE_TMA_LOWER: True,
+    #     tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True,
+    # },
+    target="c"
 )
 def sparse_attention_fwd_kernel_v1(
     num_heads,
@@ -367,18 +368,6 @@ def sparse_attention_fwd_kernel_v1(
 
 @tilelang.jit(
     out_idx=[-1],
-    compile_flags=[
-        "-O3",
-        "-Wno-deprecated-declarations",
-        "-U__CUDA_NO_HALF_OPERATORS__",
-        "-U__CUDA_NO_HALF_CONVERSIONS__",
-        "-U__CUDA_NO_HALF2_OPERATORS__",
-        "-U__CUDA_NO_BFLOAT16_CONVERSIONS__",
-        "--expt-relaxed-constexpr",
-        "--expt-extended-lambda",
-        "--ptxas-options=-v,--register-usage-level=10",
-        "-DNDEBUG",
-    ],
 )  # type: ignore
 def sparse_attention_fwd_kernel_v2(
     num_heads: int,

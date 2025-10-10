@@ -48,7 +48,8 @@ class IntelAMXAttnBackend(AttentionBackend):
         else:
             max_extend_len = torch.max(forward_batch.extend_seq_lens).item()
         self.forward_metadata = (attn_logits, max_extend_len)
-
+    def get_cuda_graph_seq_len_fill_value(self):
+        return 1
     def get_graph_seq_len_fill_value(self):
         return 1
 
