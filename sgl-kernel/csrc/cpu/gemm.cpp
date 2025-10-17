@@ -507,10 +507,10 @@ void fma_linear_kernel_impl(
         tinygemm_kernel_f32<scalar_t, has_bias>(
             /*   A */ mat1_f32 + mb_start * K,
             /*   B */ mat2_f32,
-            /*   C */ out + mb_start * N,
+            /*   C */ post_mul==nullptr? out + mb_start * N: out + mb_start * K,
             /* Ctmp*/ Ctmp,
             /* bias*/ bias,
-            post_mul,
+            post_mul==nullptr? post_mul : post_mul + mb_start * K,
             /*   M */ mb_size,
             /*   N */ N,
             /*   K */ K,

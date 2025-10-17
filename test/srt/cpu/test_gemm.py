@@ -100,7 +100,7 @@ class TestGemm(CustomTestCase):
 
     def test_fp32_gemm(self):
         for params in itertools.product(
-            [1, 8 , 32],
+            [1, 8 , 32, 1024],
             [12, 1],
             self.K,
             self.has_bias,
