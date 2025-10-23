@@ -264,9 +264,7 @@ at::Tensor fused_recurrent_gated_delta_rule_cpu(
 );
 // fused_sigmoid_gating_delta_rule_update
 at::Tensor fused_sigmoid_gating_delta_rule_update_cpu(
-  const at::Tensor& query,
-  const at::Tensor& key,
-  const at::Tensor& value,
+  at::Tensor& mixed_qkv,
   const at::Tensor& A_log,
   const at::Tensor& a,
   const at::Tensor& dt_bias,
@@ -465,7 +463,7 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
   m.def("fused_recurrent_gated_delta_rule_cpu(Tensor query, Tensor key, Tensor value, Tensor g, Tensor beta, Tensor cache_indices, Tensor(a!) initial_state, bool use_qk_l2norm_in_kernel) -> Tensor");
   m.impl("fused_recurrent_gated_delta_rule_cpu", torch::kCPU, &fused_recurrent_gated_delta_rule_cpu);
   // fused_sigmoid_gating_delta_rule_update
-  m.def("fused_sigmoid_gating_delta_rule_update_cpu(Tensor query, Tensor key, Tensor value, Tensor A_log, Tensor a, Tensor dt_bias, Tensor b, Tensor cache_indices, Tensor(a!) initial_state, bool use_qk_l2norm_in_kernel) -> Tensor");
+  m.def("fused_sigmoid_gating_delta_rule_update_cpu(Tensor mixed_qkv, Tensor A_log, Tensor a, Tensor dt_bias, Tensor b, Tensor cache_indices, Tensor(a!) initial_state, bool use_qk_l2norm_in_kernel) -> Tensor");
   m.impl("fused_sigmoid_gating_delta_rule_update_cpu", torch::kCPU, &fused_sigmoid_gating_delta_rule_update_cpu);
   // fused_qkvzba_split_reshape_cat_cpu
   m.def("fused_qkvzba_split_reshape_cat_cpu(Tensor mixed_qkvz, Tensor mixed_ba, int num_heads_qk, int num_heads_v, int head_qk, int head_v) -> (Tensor, Tensor, Tensor, Tensor)");

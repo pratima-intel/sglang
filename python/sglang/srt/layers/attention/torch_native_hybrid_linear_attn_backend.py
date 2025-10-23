@@ -408,27 +408,8 @@ class MambaAttnBackend(AttentionBackend):
             activation=="silu",
             None,
         )
-
-        query, key, value = torch.split(
-            mixed_qkv,
-            [
-                key_dim // attn_tp_size,
-                key_dim // attn_tp_size,
-                value_dim // attn_tp_size,
-            ],
-            dim=-1,
-        )
-        # Reshape from [l, h*d] to [1, l, h, d]
-        seq_len = query.shape[0]
-        num_heads = query.shape[1] // head_k_dim
-        num_value_heads = value.shape[1] // head_v_dim
-        query = query.view(1, seq_len, num_heads, head_k_dim)
-        key = key.view(1, seq_len, num_heads, head_k_dim)
-        value = value.view(1, seq_len, num_value_heads, head_v_dim)
         core_attn_out = torch.ops.sgl_kernel.fused_sigmoid_gating_delta_rule_update_cpu(
-            query.contiguous(),
-            key.contiguous(),
-            value,
+            mixed_qkv,
             A_log,
             a,
             dt_bias,

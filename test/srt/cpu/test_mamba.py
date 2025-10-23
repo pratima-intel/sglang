@@ -306,9 +306,23 @@ class TestMambaAttention(CustomTestCase):
         head_v_dim = 128
         num_heads = 16
         seq_len = 1
-        query = torch.rand(seq_len, batch_size, num_heads, head_k_dim, dtype=torch.bfloat16)
-        key = torch.rand(seq_len, batch_size, num_heads, head_k_dim, dtype=torch.bfloat16)
-        value = torch.rand(seq_len, batch_size, num_value_heads, head_v_dim, dtype=torch.bfloat16)
+        attn_tp_size = 1
+        key_dim = head_k_dim * num_heads
+        value_dim = head_v_dim * num_value_heads
+        mixed_qkv_dim = (key_dim * 2 + value_dim) // attn_tp_size
+        mixed_qkv = torch.rand(seq_len * batch_size, mixed_qkv_dim, dtype=torch.bfloat16)
+        query, key, value = torch.split(
+            mixed_qkv,
+            [
+                key_dim // attn_tp_size,
+                key_dim // attn_tp_size,
+                value_dim // attn_tp_size,
+            ],
+            dim=-1,
+        )
+        query = query.view(1, seq_len, num_heads, head_k_dim)
+        key = key.view(1, seq_len, num_heads, head_k_dim)
+        value = value.view(1, seq_len, num_value_heads, head_v_dim)
         A_log = torch.rand(num_value_heads, dtype=torch.float32)
         a = torch.rand(batch_size, num_value_heads, dtype=torch.bfloat16)
         b = torch.rand(batch_size, num_value_heads, dtype=torch.bfloat16)
@@ -334,9 +348,7 @@ class TestMambaAttention(CustomTestCase):
             use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel
         )
         core_attn_out = torch.ops.sgl_kernel.fused_sigmoid_gating_delta_rule_update_cpu(
-            query,
-            key,
-            value,
+            mixed_qkv,
             A_log,
             a,
             dt_bias,
