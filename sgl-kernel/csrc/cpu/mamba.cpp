@@ -1325,7 +1325,7 @@ at::Tensor fused_gdn_gating_cpu(const at::Tensor& A_log, const at::Tensor& a, co
 }
 
 
-at::Tensor causal_conv1d_update_cpu(
+at::Tensor causal_conv1d_update_cpu_ori(
     const at::Tensor& hidden_states,
     at::Tensor& conv_states,
     const at::Tensor& cache_indices,
@@ -1333,7 +1333,7 @@ at::Tensor causal_conv1d_update_cpu(
     const c10::optional<at::Tensor>& conv_bias,
     bool silu_activation,
     const c10::optional<at::Tensor>& cache_seqlens) {
-  RECORD_FUNCTION("sgl-kernel::causal_conv1d_update_cpu", std::vector<c10::IValue>({hidden_states, conv_states, conv_weights}));
+  RECORD_FUNCTION("sgl-kernel::causal_conv1d_update_cpu_ori", std::vector<c10::IValue>({hidden_states, conv_states, conv_weights}));
   if (hidden_states.scalar_type() == at::ScalarType::Float) {
     return causal_conv1d_update_kernel_inner<float>(
         hidden_states,

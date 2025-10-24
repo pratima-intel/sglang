@@ -399,7 +399,7 @@ class MambaAttnBackend(AttentionBackend):
 
         conv_states, ssm_states = self.req_to_token_pool.get_mamba_params(layer_id)
         cache_indices = self.forward_metadata.mamba_cache_indices
-        mixed_qkv = torch.ops.sgl_kernel.causal_conv1d_update_cpu(
+        mixed_qkv = torch.ops.sgl_kernel.causal_conv1d_update_cpu_ori(
             mixed_qkv,
             conv_states,
             cache_indices,
@@ -432,6 +432,7 @@ class MambaAttnBackend(AttentionBackend):
     ):
         mixed_qkv = kwargs["mixed_qkv"]
         conv_weights = kwargs["conv_weights"]
+        conv_packed_weights = kwargs["conv_packed_weights"]
         bias = kwargs["bias"]
         activation = kwargs["activation"]
         key_dim = kwargs["key_dim"]
@@ -473,23 +474,17 @@ class MambaAttnBackend(AttentionBackend):
             )
             has_initial_states = forward_batch.extend_prefix_lens > 0
             conv_states_to_use = conv_states
-        start_q = 0
-        for i in range(batch_size):
-            end_q = query_start_loc[i + 1]
-            mixed_qkv_i, final_states = causal_conv1d_ref(
-                mixed_qkv[start_q:end_q].transpose(0, 1),
-                conv_weights,
+            mixed_qkv = torch.ops.sgl_kernel.causal_conv1d_fwd_cpu(
+                mixed_qkv.transpose(0, 1),
+                conv_packed_weights,
                 bias,
-                activation=activation,
-                initial_states=conv_states_to_use[cache_indices[i]] if has_initial_states[i] else None,
-                return_final_states=True,
-            )
-            mixed_qkv[start_q:end_q, :] = mixed_qkv_i.transpose(0, 1)
-            if not is_target_verify:
-                conv_states[cache_indices[i]] = final_states.to(
-                    conv_states.dtype, copy=False
-                )
-            start_q = end_q
+                None,
+                query_start_loc,
+                cache_indices,
+                has_initial_states,
+                True,
+                self.pad_slot_id,
+                True).transpose(0, 1)[:seq_len]
 
         key_split_dim = key_dim // attn_tp_size
         value_split_dim = value_dim // attn_tp_size
