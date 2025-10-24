@@ -450,10 +450,12 @@ class Qwen3GatedDeltaNet(nn.Module):
         conv_weights = self.conv1d.weight.view(
             self.conv1d.weight.size(0), self.conv1d.weight.size(2)
         )
+        conv_packed_weights = self.conv1d.packed_cov
 
         kwargs = {
             "mixed_qkv": mixed_qkv,
             "conv_weights": conv_weights,
+            "conv_packed_weights": conv_packed_weights,
             "bias": self.conv1d.bias,
             "activation": self.activation,
             "key_dim": self.key_dim,

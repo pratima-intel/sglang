@@ -61,6 +61,11 @@ def _amx_process_weight_after_loading(
                 logger.warning(
                     f"Using transposed plain for shape {weight_tensor.shape} in {module}. "
                 )
+            elif weight_tensor.dim() == 3:
+                packed_weight = torch.ops.sgl_kernel.causal_conv1d_weight_pack(weight_tensor.view(-1, weight_tensor.size(-1)))
+                packed_weight = torch.nn.Parameter(packed_weight, requires_grad=False)
+                packed_weight.__dict__ = weight_tensor.__dict__
+                setattr(module, "packed_cov", packed_weight)
             return
 
         packed_weight = torch.nn.Parameter(
