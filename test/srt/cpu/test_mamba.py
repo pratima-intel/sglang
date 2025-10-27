@@ -106,12 +106,6 @@ def torch_chunk_gated_delta_rule(
     query, key, value, k_beta, v_beta = [
         x.reshape(x.shape[0], x.shape[1], -1, chunk_size, x.shape[-1]) for x in (query, key, value, k_beta, v_beta)
     ]
-    # print("[pt] q_pad: ", query.shape, query.stride(), query)
-    # print("[pt] k_pad: ", key.shape, key.stride(), key)
-    # print("[pt] v_pad: ", value.shape, value.stride(), value)
-    # print("[pt] beta: ", beta.shape, beta)
-    # print("[pt] k_beta: ", k_beta.shape, k_beta)
-    # print("[pt] v_beta: ", v_beta.shape, v_beta)
     g = g.reshape(g.shape[0], g.shape[1], -1, chunk_size)
     mask = torch.triu(torch.ones(chunk_size, chunk_size, dtype=torch.bool, device=query.device), diagonal=0)
 
