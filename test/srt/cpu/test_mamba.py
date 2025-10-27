@@ -396,14 +396,14 @@ class TestMambaAttention(CustomTestCase):
         self.assertTrue(torch.allclose(a, a_ref, atol=atol, rtol=rtol))
 
     def test_chunk_gated_delta_rule(self):
-        B, T, HK, HV, EK, EV, N = 1, 512, 16, 32, 128, 128, 4
-        query_ = torch.rand((B, T, HK, EK), dtype=torch.bfloat16) * 0.1
-        key_ = torch.rand((B, T, HK, EK), dtype=torch.bfloat16) * 0.1
-        value_ = torch.rand((B, T, HV, EV), dtype=torch.bfloat16) * 0.1
-        g_ = torch.rand((B, T, HV), dtype=torch.float32) * 0.1
-        beta_ = torch.rand((B, T, HV), dtype=torch.bfloat16) * 0.1
-        cu_seqlens_ = torch.tensor([0, 128, 256, 384, T], dtype=torch.int32)
-        initial_state_ = torch.rand((N, HV, EK, EV), dtype=torch.float32) * 0.1
+        B, T, HK, HV, EK, EV, N = 1, 256, 3, 6, 64, 64, 2
+        query_ = torch.rand((B, T, HK, EK), dtype=torch.bfloat16) * 0.05
+        key_ = torch.rand((B, T, HK, EK), dtype=torch.bfloat16) * 0.05
+        value_ = torch.rand((B, T, HV, EV), dtype=torch.bfloat16) * 0.05
+        g_ = torch.rand((B, T, HV), dtype=torch.float32) * 0.05
+        beta_ = torch.rand((B, T, HV), dtype=torch.bfloat16) * 0.05
+        cu_seqlens_ = torch.tensor([0, 128, T], dtype=torch.int32)
+        initial_state_ = torch.rand((N, HV, EK, EV), dtype=torch.float32) * 0.05
 
         core_attn_out_ref, last_recurrent_state_ref = chunk_gated_delta_rule_update(
             query=query_,
@@ -435,8 +435,8 @@ class TestMambaAttention(CustomTestCase):
             use_qk_l2norm_in_kernel=True,
         )
         atol = rtol = precision[core_attn_out.dtype]
-        self.assertTrue(torch.allclose(core_attn_out, core_attn_out_ref, rtol=0.2, atol=0.2))
-        self.assertTrue(torch.allclose(last_recurrent_state, last_recurrent_state_ref, rtol=0.2, atol=0.2))
+        self.assertTrue(torch.allclose(core_attn_out, core_attn_out_ref, rtol=rtol, atol=atol))
+        self.assertTrue(torch.allclose(last_recurrent_state, last_recurrent_state_ref, rtol=rtol, atol=atol))
 
 if __name__ == "__main__":
     unittest.main()
