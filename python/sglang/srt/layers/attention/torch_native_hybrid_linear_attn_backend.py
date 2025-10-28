@@ -396,17 +396,19 @@ class MambaAttnBackend(AttentionBackend):
         A_log = kwargs["A_log"]
         dt_bias = kwargs["dt_bias"]
         layer_id = kwargs["layer_id"]
-
+        conv_packed_weights = kwargs["conv_packed_weights"]
         conv_states, ssm_states = self.req_to_token_pool.get_mamba_params(layer_id)
         cache_indices = self.forward_metadata.mamba_cache_indices
-        mixed_qkv = torch.ops.sgl_kernel.causal_conv1d_update_cpu_ori(
+        mixed_qkv = torch.ops.sgl_kernel.causal_conv1d_update_cpu(
             mixed_qkv,
             conv_states,
-            cache_indices,
-            conv_weights,
+            conv_packed_weights,
             bias,
             activation=="silu",
             None,
+            cache_indices,
+            -1,
+            True,
         )
         core_attn_out = torch.ops.sgl_kernel.fused_sigmoid_gating_delta_rule_update_cpu(
             mixed_qkv,
@@ -451,7 +453,6 @@ class MambaAttnBackend(AttentionBackend):
 
         query_start_loc = self.forward_metadata.query_start_loc
         cache_indices = self.forward_metadata.mamba_cache_indices
-        batch_size = forward_batch.batch_size
         if is_target_verify:
             (
                 conv_states,
@@ -473,12 +474,11 @@ class MambaAttnBackend(AttentionBackend):
                 layer_id
             )
             has_initial_states = forward_batch.extend_prefix_lens > 0
-            conv_states_to_use = conv_states
             mixed_qkv = torch.ops.sgl_kernel.causal_conv1d_fwd_cpu(
                 mixed_qkv.transpose(0, 1),
                 conv_packed_weights,
                 bias,
-                None,
+                conv_states,
                 query_start_loc,
                 cache_indices,
                 has_initial_states,
