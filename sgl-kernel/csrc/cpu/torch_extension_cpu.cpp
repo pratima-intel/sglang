@@ -354,9 +354,9 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
   m.impl("qwen3_next_rmsnorm_gated_cpu", torch::kCPU, &qwen3_next_rmsnorm_gated_cpu);
   m.def("fused_add_rmsnorm_cpu(Tensor(a!) input, Tensor residual, Tensor weight, float eps) -> ()");
   m.impl("fused_add_rmsnorm_cpu", torch::kCPU, &fused_add_rmsnorm_cpu);
-  m.def("gemma_fused_add_rmsnorm_cpu(Tensor input, Tensor residual, Tensor weight, float eps) -> ()");
+  m.def("gemma_fused_add_rmsnorm_cpu(Tensor(a!) input, Tensor residual, Tensor weight, float eps) -> ()");
   m.impl("gemma_fused_add_rmsnorm_cpu", torch::kCPU, &gemma_fused_add_rmsnorm_cpu);
-  
+
   // topk
   m.def("topk_sigmoid_cpu(Tensor hidden_states, Tensor gating_output, int topk, bool renormalize) -> (Tensor, Tensor)");
   m.impl("topk_sigmoid_cpu", torch::kCPU, &topk_sigmoid_cpu);
