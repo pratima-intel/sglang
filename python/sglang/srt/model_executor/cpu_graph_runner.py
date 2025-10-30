@@ -94,7 +94,7 @@ def get_batch_sizes_to_capture(model_runner: ModelRunner):
     server_args = model_runner.server_args
     # cpu torch compile only speeds up decoding by
     # reducing python overhead when bs is small
-    capture_bs = list(range(1, 17))
+    capture_bs = list(range(1, 21)) + list(range(40, 281, 20)) + list(range(300, 381, 40))
     capture_bs = [bs for bs in capture_bs if bs <= server_args.torch_compile_max_bs]
     capture_bs = [bs for bs in capture_bs if bs <= model_runner.req_to_token_pool.size]
     capture_bs = list(sorted(set(capture_bs)))
