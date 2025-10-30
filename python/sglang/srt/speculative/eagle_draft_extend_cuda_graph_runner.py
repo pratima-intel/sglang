@@ -21,7 +21,18 @@ from sglang.srt.model_executor.forward_batch_info import (
     ForwardBatch,
     ForwardMode,
 )
-from sglang.srt.speculative.eagle_utils import EagleDraftInput, fast_topk
+from sglang.srt.utils import (
+    is_cpu,
+)
+from sglang.srt.speculative.eagle_utils import EagleDraftInput
+if is_cpu():
+    from sglang.srt.speculative.eagle_utils_cpu import (
+        fast_topk,
+    )
+else:
+    from sglang.srt.speculative.eagle_utils import (
+        fast_topk,
+    )
 from sglang.srt.utils import (
     require_attn_tp_gather,
     require_gathered_buffer,

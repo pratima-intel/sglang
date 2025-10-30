@@ -38,10 +38,10 @@ from sglang.srt.speculative.eagle_utils import (
     EagleDraftInput,
     EagleVerifyInput,
     EagleVerifyOutput,
-    assign_draft_cache_locs,
-    fast_topk,
+    # assign_draft_cache_locs,
+    # fast_topk,
     generate_token_bitmask,
-    select_top_k_tokens,
+    # select_top_k_tokens,
 )
 from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 from sglang.srt.utils import (
@@ -49,11 +49,25 @@ from sglang.srt.utils import (
     get_available_gpu_memory,
     get_bool_env_var,
     is_cuda,
+    is_cpu,
     next_power_of_2,
 )
 
 if is_cuda():
     from sgl_kernel import segment_packbits
+
+if is_cpu():
+    from sglang.srt.speculative.eagle_utils_cpu import (
+        fast_topk,
+        assign_draft_cache_locs,
+        select_top_k_tokens,
+    )
+else:
+    from sglang.srt.speculative.eagle_utils import (
+        fast_topk,
+        assign_draft_cache_locs,
+        select_top_k_tokens,
+    )
 
 logger = logging.getLogger(__name__)
 RETURN_ORIGINAL_LOGPROB = get_bool_env_var("RETURN_ORIGINAL_LOGPROB")
@@ -218,6 +232,7 @@ class EAGLEWorker(TpModelWorker):
             "flashmla": self._create_flashmla_decode_backend,
             "trtllm_mha": self._create_trtllm_mha_decode_backend,
             "trtllm_mla": self._create_trtllm_mla_decode_backend,
+            "torch_native_hybrid_linear_attn": self._create_cpu_decode_backend,
         }
 
         return self._create_backend(
@@ -235,6 +250,7 @@ class EAGLEWorker(TpModelWorker):
             "hybrid_linear_attn": self._create_fa3_prefill_backend,
             "trtllm_mha": self._create_trtllm_mha_prefill_backend,
             "trtllm_mla": self._create_trtllm_mla_prefill_backend,
+            "torch_native_hybrid_linear_attn": self._create_cpu_prefill_backend,
         }
         backend_name = (
             "decode_attention_backend"
@@ -273,6 +289,15 @@ class EAGLEWorker(TpModelWorker):
         )
 
         return TritonMultiStepDraftBackend(
+            self.draft_model_runner, self.topk, self.speculative_num_steps
+        )
+
+    def _create_cpu_decode_backend(self):
+        from sglang.srt.layers.attention.torch_native_hybrid_linear_attn_backend import (
+            CPUMultiStepDraftBackend,
+        )
+
+        return CPUMultiStepDraftBackend(
             self.draft_model_runner, self.topk, self.speculative_num_steps
         )
 
@@ -344,6 +369,11 @@ class EAGLEWorker(TpModelWorker):
         from sglang.srt.layers.attention.triton_backend import TritonAttnBackend
 
         return TritonAttnBackend(self.draft_model_runner, skip_prefill=False)
+
+    def _create_cpu_prefill_backend(self):
+        from sglang.srt.layers.attention.torch_native_hybrid_linear_attn_backend import CPUAttnBackend
+
+        return CPUAttnBackend(self.draft_model_runner, skip_prefill=False)
 
     def _create_aiter_prefill_backend(self):
         from sglang.srt.layers.attention.aiter_backend import AiterAttnBackend
@@ -581,20 +611,37 @@ class EAGLEWorker(TpModelWorker):
                 )
             )
 
-        assign_draft_cache_locs[(num_seqs,)](
-            batch.req_pool_indices,
-            batch.req_to_token_pool.req_to_token,
-            batch.seq_lens,
-            self.extend_lens,
-            self.num_new_pages_per_topk,
-            out_cache_loc,
-            batch.req_to_token_pool.req_to_token.shape[1],
-            self.topk,
-            self.speculative_num_steps,
-            self.page_size,
-            next_power_of_2(num_seqs),
-            next_power_of_2(self.speculative_num_steps),
-        )
+        if is_cpu():
+            assign_draft_cache_locs(
+                #[(num_seqs,)]
+                batch.req_pool_indices,
+                batch.req_to_token_pool.req_to_token,
+                batch.seq_lens,
+                self.extend_lens,
+                self.num_new_pages_per_topk,
+                out_cache_loc,
+                batch.req_to_token_pool.req_to_token.shape[1],
+                self.topk,
+                self.speculative_num_steps,
+                self.page_size,
+                next_power_of_2(num_seqs),
+                next_power_of_2(self.speculative_num_steps),
+            )
+        else:
+            assign_draft_cache_locs[(num_seqs,)](
+                batch.req_pool_indices,
+                batch.req_to_token_pool.req_to_token,
+                batch.seq_lens,
+                self.extend_lens,
+                self.num_new_pages_per_topk,
+                out_cache_loc,
+                batch.req_to_token_pool.req_to_token.shape[1],
+                self.topk,
+                self.speculative_num_steps,
+                self.page_size,
+                next_power_of_2(num_seqs),
+                next_power_of_2(self.speculative_num_steps),
+            )
 
         if self.page_size > 1 and self.topk > 1:
             # Remove padded slots

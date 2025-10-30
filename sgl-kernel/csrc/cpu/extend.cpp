@@ -721,3 +721,28 @@ void extend_attention_cpu(
     });
   });
 }
+
+void mtp_extend_attention_cpu(
+    at::Tensor& q_extend,
+    at::Tensor& k_extend,
+    at::Tensor& v_extend,
+    at::Tensor& o_extend,
+    at::Tensor& k_buffer,
+    at::Tensor& v_buffer,
+    at::Tensor& qo_indptr,
+    at::Tensor& kv_indptr,
+    at::Tensor& kv_indices,
+    at::Tensor& custom_mask,
+    bool is_causal,
+    at::Tensor& mask_indptr,
+    int64_t max_len_extend,
+    double sm_scale,
+    double logit_cap,
+    bool skip_prefix_custom_mask,
+    int64_t sliding_window_size,
+    at::Tensor& sink,
+    at::Tensor& window_kv_offsets,
+    int64_t xai_temperature_len){
+
+  return;
+}

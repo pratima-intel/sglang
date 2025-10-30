@@ -24,7 +24,7 @@ from sglang.srt.managers.schedule_batch import (
 )
 from sglang.srt.mem_cache.allocator import BaseTokenToKVPoolAllocator
 from sglang.srt.model_executor.forward_batch_info import CaptureHiddenMode, ForwardMode
-from sglang.srt.utils import is_cuda, is_hip, next_power_of_2
+from sglang.srt.utils import is_cuda, is_hip, is_cpu, next_power_of_2
 
 logger = logging.getLogger(__name__)
 
@@ -294,15 +294,30 @@ class EagleVerifyInput:
             self.last_loc = last_loc
 
         bs = batch.batch_size()
-        assign_req_to_token_pool[(bs,)](
-            batch.req_pool_indices,
-            batch.req_to_token_pool.req_to_token,
-            batch.seq_lens,
-            end_offset,
-            batch.out_cache_loc,
-            batch.req_to_token_pool.req_to_token.shape[1],
-            next_power_of_2(bs),
-        )
+        if is_cpu():
+            from sglang.srt.speculative.eagle_utils_cpu import (
+                assign_req_to_token_pool
+            )
+            assign_req_to_token_pool(
+                #[(bs,)]
+                batch.req_pool_indices,
+                batch.req_to_token_pool.req_to_token,
+                batch.seq_lens,
+                end_offset,
+                batch.out_cache_loc,
+                batch.req_to_token_pool.req_to_token.shape[1],
+                next_power_of_2(bs),
+            )
+        else:
+            assign_req_to_token_pool[(bs,)](
+                batch.req_pool_indices,
+                batch.req_to_token_pool.req_to_token,
+                batch.seq_lens,
+                end_offset,
+                batch.out_cache_loc,
+                batch.req_to_token_pool.req_to_token.shape[1],
+                next_power_of_2(bs),
+            )
 
     def generate_attn_arg_prefill(
         self,

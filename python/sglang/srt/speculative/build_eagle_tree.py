@@ -127,20 +127,20 @@ def build_tree_kernel_efficient(
             (bs * num_verify_tokens,), device=device, dtype=torch.long
         )
 
-    sgl_build_tree_kernel_efficient(
-        parent_list,
-        top_scores_index,
-        seq_lens,
-        tree_mask,
-        positions,
-        retrive_index,
-        retrive_next_token,
-        retrive_next_sibling,
-        topk,
-        spec_steps,
-        num_verify_tokens,
-        tree_mask_mode,
-    )
+    # sgl_build_tree_kernel_efficient(
+    #     parent_list,
+    #     top_scores_index,
+    #     seq_lens,
+    #     tree_mask,
+    #     positions,
+    #     retrive_index,
+    #     retrive_next_token,
+    #     retrive_next_sibling,
+    #     topk,
+    #     spec_steps,
+    #     num_verify_tokens,
+    #     tree_mask_mode,
+    # )
     return (
         tree_mask,
         positions,

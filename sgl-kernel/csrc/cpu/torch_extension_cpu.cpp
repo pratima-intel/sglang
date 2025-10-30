@@ -87,6 +87,22 @@ void decode_attention_cpu(
     double sm_scale,
     double logit_cap);
 
+void mtp_decode_attention_cpu(
+    at::Tensor& query,
+    at::Tensor& k_buffer,
+    at::Tensor& v_buffer,
+    at::Tensor& output,
+    at::Tensor& kv_indptr,
+    at::Tensor& kv_indices,
+    at::Tensor& attn_logits,
+    at::Tensor& attn_lse,
+    int64_t num_kv_splits,
+    int64_t max_kv_splits,
+    double sm_scale,
+    double logit_cap,
+    at::Tensor& sinks,
+    int64_t xai_temperature_len);
+
 void extend_attention_cpu(
     at::Tensor& q_extend,
     at::Tensor& k_extend,
@@ -102,6 +118,28 @@ void extend_attention_cpu(
     int64_t max_len_extend,
     double sm_scale,
     double logit_cap);
+
+void mtp_extend_attention_cpu(
+    at::Tensor& q_extend,
+    at::Tensor& k_extend,
+    at::Tensor& v_extend,
+    at::Tensor& o_extend,
+    at::Tensor& k_buffer,
+    at::Tensor& v_buffer,
+    at::Tensor& qo_indptr,
+    at::Tensor& kv_indptr,
+    at::Tensor& kv_indices,
+    at::Tensor& custom_mask,
+    bool is_causal,
+    at::Tensor& mask_indptr,
+    int64_t max_len_extend,
+    double sm_scale,
+    double logit_cap,
+    bool skip_prefix_custom_mask,
+    int64_t sliding_window_size,
+    at::Tensor& sink,
+    at::Tensor& window_kv_offsets,
+    int64_t xai_temperature_len);
 
  std::tuple<at::Tensor, at::Tensor> chunk_gated_delta_rule_cpu(
     at::Tensor& query,
@@ -381,6 +419,11 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
       "Tensor loc, Tensor attn_logits, Tensor req_to_token, Tensor req_pool_indices, Tensor seq_lens, float sm_scale, "
       "float logit_cap) -> ()");
   m.impl("decode_attention_cpu", torch::kCPU, &decode_attention_cpu);
+  m.def(
+      "mtp_decode_attention_cpu(Tensor query, Tensor k_cache, Tensor v_cahce, Tensor(a!) output, Tensor kv_indptr, Tensor kv_indices, "
+      "Tensor attn_logits, Tensor attn_lse, int num_kv_splits, int max_kv_splits, float sm_scale, "
+      "float logit_cap, Tensor sinks, int xai_temperature_len) -> ()");
+  m.impl("mtp_decode_attention_cpu", torch::kCPU, &mtp_decode_attention_cpu);
 
   // extend
   m.def(
@@ -388,6 +431,13 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
       "Tensor v_buffer, Tensor req_to_token, Tensor req_pool_indices, Tensor seq_lens, Tensor extend_seq_lens, Tensor "
       "extend_start_loc, int max_len_extend, float sm_scale, float logit_cap) -> ()");
   m.impl("extend_attention_cpu", torch::kCPU, &extend_attention_cpu);
+  m.def(
+      "mtp_extend_attention_cpu(Tensor q_extend, Tensor k_extend, Tensor v_extend, Tensor(a!) o_extend, Tensor k_buffer, "
+      "Tensor v_buffer, Tensor qo_indptr, Tensor kv_indptr, Tensor kv_indices, Tensor custom_mask, "
+      "bool is_causal, Tensor mask_indptr, int max_len_extend, float sm_scale, float logit_cap, "
+      "bool skip_prefix_custom_mask, int sliding_window_size, Tensor sink, Tensor window_kv_offsets, "
+      "int xai_temperature_len) -> ()");
+  m.impl("mtp_extend_attention_cpu", torch::kCPU, &mtp_extend_attention_cpu);
 
   // linear attn
   m.def(

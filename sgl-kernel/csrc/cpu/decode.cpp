@@ -1573,3 +1573,22 @@ void decode_attention_cpu(
     });
   });
 }
+
+void mtp_decode_attention_cpu(
+    at::Tensor& query,
+    at::Tensor& k_buffer,
+    at::Tensor& v_buffer,
+    at::Tensor& output,
+    at::Tensor& kv_indptr,
+    at::Tensor& kv_indices,
+    at::Tensor& attn_logits,
+    at::Tensor& attn_lse,
+    int64_t num_kv_splits,
+    int64_t max_kv_splits,
+    double sm_scale,
+    double logit_cap,
+    at::Tensor& sinks,
+    int64_t xai_temperature_len){
+
+  return;
+}
