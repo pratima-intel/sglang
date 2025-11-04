@@ -20,6 +20,7 @@ from sglang.srt.managers.schedule_batch import (
 from sglang.srt.server_args import get_global_server_args
 from sglang.srt.utils import (
     envs,
+    get_bool_env_var,
     is_cpu,
     is_npu,
     is_xpu,
@@ -38,6 +39,7 @@ from sglang.srt.utils.cuda_ipc_transport_utils import (
 _is_cpu = is_cpu()
 _is_npu = is_npu()
 _is_xpu = is_xpu()
+_is_cpu = is_cpu()
 
 SGL_USE_CUDA_IPC = envs.SGLANG_USE_CUDA_IPC_TRANSPORT.get()
 
