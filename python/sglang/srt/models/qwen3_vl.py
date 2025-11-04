@@ -54,13 +54,14 @@ from sglang.srt.models.qwen3 import Qwen3Model
 from sglang.srt.models.utils import RotaryPosMixin, compute_cu_seqlens_from_grid_numpy
 from sglang.srt.multimodal.mm_utils import run_dp_sharded_mrope_vision_model
 from sglang.srt.server_args import get_global_server_args
-from sglang.srt.utils import add_prefix, get_int_env_var
+from sglang.srt.utils import add_prefix, get_int_env_var, is_cpu
 from sglang.srt.utils.hf_transformers_utils import get_processor
 
 logger = logging.getLogger(__name__)
 
 
 # === Vision Encoder === #
+_is_cpu = is_cpu()
 
 
 class Qwen3_VisionMLP(nn.Module):
@@ -301,6 +302,7 @@ class Qwen3VLMoeVisionModel(nn.Module, RotaryPosMixin):
                     intermediate_dim=vision_config.intermediate_size,
                     hidden_act=vision_config.hidden_act,
                     norm_layer=norm_layer,
+                    attn_implementation="flash_attention_3" if not _is_cpu else "sdpa",
                     quant_config=quant_config,
                     prefix=add_prefix(f"blocks.{layer_idx}", prefix),
                     use_data_parallel=use_data_parallel,
