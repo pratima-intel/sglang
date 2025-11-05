@@ -1439,6 +1439,26 @@ class MRotaryEmbedding(RotaryEmbedding):
         ):
             self.cos_sin_cache = self.cos_sin_cache.to(query.device, dtype=query.dtype)
 
+    def _forward_cpu(
+        self,
+        positions: torch.Tensor,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        fused_set_kv_buffer_arg: Optional[FusedSetKVBufferArg] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if _is_cpu_amx_available:
+            return torch.ops.sgl_kernel.multimodal_rotary_embedding_cpu(
+                positions,
+                query,
+                key,
+                self.head_size,
+                self.cos_sin_cache,
+                self.mrope_section if self.mrope_section else None,
+                self.mrope_interleaved,
+                self.is_neox_style,
+            )
+        return self._forward_native(positions, query, key, fused_set_kv_buffer_arg)
+
     @torch.compile(dynamic=True, backend=get_compiler_backend())
     def _forward_native(
         self,
@@ -1518,6 +1538,8 @@ class MRotaryEmbedding(RotaryEmbedding):
             return self._forward_triton(positions, query, key)
         elif _is_npu:
             return self._forward_npu(positions, query, key)
+        elif _is_cpu:
+            return self._forward_cpu(positions, query, key)
         else:
             return self._forward_native(positions, query, key)
 
