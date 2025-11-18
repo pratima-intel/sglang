@@ -92,29 +92,32 @@ class IntelAMXAttnBackend(AttentionBackend):
         else:
             o = torch.empty_like(q)
 
+        print("intel amx backend, forward_extend: q ", q.size())
+        print("intel amx backend, forward_extend: k ", k.size())
+        print("intel amx backend, forward_extend: v ", v.size())
         if save_kv_cache:
-            forward_batch.token_to_kv_pool.set_kv_buffer(
-                layer, forward_batch.out_cache_loc, k, v
-            )
-
+            for i in range(k.size()[0]):
+                forward_batch.token_to_kv_pool.set_kv_buffer(
+                    layer, forward_batch.out_cache_loc, k[i], v[i]
+                )
         _, max_extend_len = self.forward_metadata
 
-        self.extend_attention_fwd(
-            q.view(-1, layer.tp_q_head_num, layer.qk_head_dim),
-            k,
-            v,
-            o.view(-1, layer.tp_q_head_num, layer.v_head_dim),
-            forward_batch.token_to_kv_pool.get_key_buffer(layer.layer_id),
-            forward_batch.token_to_kv_pool.get_value_buffer(layer.layer_id),
-            forward_batch.req_to_token_pool.req_to_token,
-            forward_batch.req_pool_indices,
-            forward_batch.seq_lens,
-            forward_batch.extend_seq_lens,
-            forward_batch.extend_start_loc,
-            max_extend_len,
-            layer.scaling,
-            layer.logit_cap,
-        )
+        # self.extend_attention_fwd(
+        #     q.view(-1, layer.tp_q_head_num, layer.qk_head_dim),
+        #     k,
+        #     v,
+        #     o.view(-1, layer.tp_q_head_num, layer.v_head_dim),
+        #     forward_batch.token_to_kv_pool.get_key_buffer(layer.layer_id),
+        #     forward_batch.token_to_kv_pool.get_value_buffer(layer.layer_id),
+        #     forward_batch.req_to_token_pool.req_to_token,
+        #     forward_batch.req_pool_indices,
+        #     forward_batch.seq_lens,
+        #     forward_batch.extend_seq_lens,
+        #     forward_batch.extend_start_loc,
+        #     max_extend_len,
+        #     layer.scaling,
+        #     layer.logit_cap,
+        # )
         return o
 
     def forward_decode(
@@ -126,6 +129,9 @@ class IntelAMXAttnBackend(AttentionBackend):
         forward_batch: ForwardBatch,
         save_kv_cache=True,
     ):
+        print("intel amx backend, forward_decode: q ", q.size())
+        print("intel amx backend, forward_decode: k ", k.size())
+        print("intel amx backend, forward_decode: v ", v.size())
         attn_logits, _ = self.forward_metadata
 
         q = q.reshape(-1, layer.tp_q_head_num * layer.qk_head_dim)

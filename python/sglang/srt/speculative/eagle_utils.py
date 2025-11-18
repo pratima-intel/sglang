@@ -248,6 +248,7 @@ class EagleVerifyInput:
 
     @classmethod
     def create_idle_input(cls, topk: int, spec_steps: int, num_verify_tokens: int):
+        num_verify_tokens = 1
         return cls(
             draft_token=torch.empty((0,), dtype=torch.long, device="cuda"),
             custom_mask=torch.full((0,), True, dtype=torch.bool, device="cuda"),
@@ -396,16 +397,25 @@ class EagleVerifyInput:
             )
 
         bs = self.retrive_index.shape[0]
+        self.draft_token = torch.arange(self.draft_token_num)
+        print("verify draft_token ", self.draft_token.size())
+        print("verify retrive_index ", self.retrive_index.shape)
+        print("verify draft_token_num ", self.draft_token_num)
         candidates = self.draft_token.reshape(bs, self.draft_token_num)
         sampling_info = batch.sampling_info
 
         predict_shape = list(logits_output.next_token_logits.shape)[:-1]
         predict_shape[-1] += 1
-        predict = torch.empty(predict_shape, dtype=torch.int32, device="cuda")
+        # predict = torch.empty(predict_shape, dtype=torch.int32, device="cuda")
+        # accept_index = torch.full(
+        #     (bs, self.spec_steps + 1), -1, dtype=torch.int32, device="cuda"
+        # )
+        # accept_length = torch.empty((bs,), dtype=torch.int32, device="cuda")
+        predict = torch.empty(predict_shape, dtype=torch.int32)
         accept_index = torch.full(
-            (bs, self.spec_steps + 1), -1, dtype=torch.int32, device="cuda"
+            (bs, self.spec_steps + 1), -1, dtype=torch.int32
         )
-        accept_length = torch.empty((bs,), dtype=torch.int32, device="cuda")
+        accept_length = torch.empty((bs,), dtype=torch.int32)
 
         if bs != len(sampling_info):
             sampling_info = copy.deepcopy(sampling_info)
@@ -449,19 +459,20 @@ class EagleVerifyInput:
             )
 
         if is_all_greedy or not TREE_SPEC_KERNEL_AVAILABLE:
-            target_predict = torch.argmax(logits_output.next_token_logits, dim=-1)
+            # target_predict = torch.argmax(logits_output.next_token_logits, dim=-1)
+            target_predict = torch.arange(self.draft_token_num)
             target_predict = target_predict.reshape(bs, self.draft_token_num)
 
-            verify_tree_greedy(
-                predicts=predict,  # mutable
-                accept_index=accept_index,  # mutable
-                accept_token_num=accept_length,  # mutable
-                candidates=candidates,
-                retrive_index=self.retrive_index,
-                retrive_next_token=self.retrive_next_token,
-                retrive_next_sibling=self.retrive_next_sibling,
-                target_predict=target_predict,
-            )
+            # verify_tree_greedy(
+            #     predicts=predict,  # mutable
+            #     accept_index=accept_index,  # mutable
+            #     accept_token_num=accept_length,  # mutable
+            #     candidates=candidates,
+            #     retrive_index=self.retrive_index,
+            #     retrive_next_token=self.retrive_next_token,
+            #     retrive_next_sibling=self.retrive_next_sibling,
+            #     target_predict=target_predict,
+            # )
         else:
             # apply temperature and get target probs
             expanded_temperature = torch.repeat_interleave(
@@ -487,14 +498,14 @@ class EagleVerifyInput:
             target_probs = target_probs.reshape(bs, self.draft_token_num, -1)
 
             draft_probs = torch.zeros(
-                target_probs.shape, dtype=torch.float32, device="cuda"
+                target_probs.shape, dtype=torch.float32
             )
 
             # coins for rejection sampling
-            coins = torch.rand_like(candidates, dtype=torch.float32, device="cuda")
+            coins = torch.rand_like(candidates, dtype=torch.float32)
             # coins for final sampling
             coins_for_final_sampling = torch.rand(
-                (bs,), dtype=torch.float32, device="cuda"
+                (bs,), dtype=torch.float32
             )
             tree_speculative_sampling_target_only(
                 predicts=predict,  # mutable
@@ -572,12 +583,15 @@ class EagleVerifyInput:
         # TODO: fuse them
         accept_index = accept_index[accept_index != -1]
         verified_id = predict[accept_index]
-        evict_mask = torch.full_like(self.draft_token, True, dtype=torch.bool)
+        # evict_mask = torch.full_like(self.draft_token, True, dtype=torch.bool)
+        self.draft_token_num = 1
+        evict_mask = torch.ones(1, True, dtype=torch.bool)
         evict_mask[accept_index] = False
 
         if page_size == 1:
+            pass
             # TODO: boolean array index leads to a device sync. Remove it.
-            token_to_kv_pool_allocator.free(batch.out_cache_loc[evict_mask])
+            # token_to_kv_pool_allocator.free(batch.out_cache_loc[evict_mask])
         else:
             if self.topk == 1:
                 # Only evict full empty page. Do not evict partial empty page
@@ -637,8 +651,12 @@ class EagleVerifyInput:
         # Construct EagleVerifyOutput
         if not has_finished:
             if page_size == 1 or self.topk == 1:
+                from sglang.srt.speculative.eagle_utils_cpu import (
+                    assign_req_to_token_pool
+                )
                 batch.out_cache_loc = batch.out_cache_loc[accept_index]
-                assign_req_to_token_pool[(bs,)](
+                # assign_req_to_token_pool[(bs,)](
+                assign_req_to_token_pool(
                     batch.req_pool_indices,
                     batch.req_to_token_pool.req_to_token,
                     batch.seq_lens,
@@ -669,7 +687,11 @@ class EagleVerifyInput:
             )
         else:
             if page_size == 1 or self.topk == 1:
-                assign_req_to_token_pool[(bs,)](
+                from sglang.srt.speculative.eagle_utils_cpu import (
+                    assign_req_to_token_pool
+                )
+                # assign_req_to_token_pool[(bs,)](
+                assign_req_to_token_pool(
                     batch.req_pool_indices,
                     batch.req_to_token_pool.req_to_token,
                     batch.seq_lens,

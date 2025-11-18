@@ -158,12 +158,12 @@ class RotaryEmbedding(CustomOp):
         query_rot = _apply_rotary_emb(query_rot, cos, sin, self.is_neox_style)
         query = torch.cat((query_rot, query_pass), dim=-1).reshape(query_shape)
 
-        key_shape = key.shape
-        key = key.view(num_tokens, -1, self.head_size)
-        key_rot = key[..., : self.rotary_dim]
-        key_pass = key[..., self.rotary_dim :]
-        key_rot = _apply_rotary_emb(key_rot, cos, sin, self.is_neox_style)
-        key = torch.cat((key_rot, key_pass), dim=-1).reshape(key_shape)
+        # key_shape = key.shape
+        # key = key.view(k_num_tokens, -1, self.head_size)
+        # key_rot = key[..., : self.rotary_dim]
+        # key_pass = key[..., self.rotary_dim :]
+        # key_rot = _apply_rotary_emb(key_rot, cos, sin, self.is_neox_style)
+        # key = torch.cat((key_rot, key_pass), dim=-1).reshape(key_shape)
         return query, key
 
     def forward_npu(
@@ -204,17 +204,27 @@ class RotaryEmbedding(CustomOp):
         offsets: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         positions = torch.add(positions, offsets) if offsets is not None else positions
-        if _is_cpu_amx_available:
-            return torch.ops.sgl_kernel.rotary_embedding_cpu(
-                positions,
-                query,
-                key,
-                self.head_size,
-                self.cos_sin_cache,
-                self.is_neox_style,
-            )
-        else:
-            return self.forward_native(positions, query, key, offsets)
+        print("rotary embedding: positions ", positions.size(), positions.shape[0])
+        for i in range(positions.shape[0]):
+            positions[i] = i
+        # if positions.shape[0] != query.size()[0]:
+        #     positions = positions[0]
+        # query = query.expand(positions.shape[0], -1)
+        # key = key.expand(positions.shape[0], -1)
+        print("rotary embedding: positions ", positions.size())
+        print("rotary embedding: query ", query.size())
+        print("rotary embedding: key ", key.size())
+        # if _is_cpu_amx_available:
+        #     return torch.ops.sgl_kernel.rotary_embedding_cpu(
+        #         positions,
+        #         query,
+        #         key,
+        #         self.head_size,
+        #         self.cos_sin_cache,
+        #         self.is_neox_style,
+        #     )
+        # else:
+        return self.forward_native(positions, query, key, offsets)
 
     def forward_cuda(
         self,

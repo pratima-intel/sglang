@@ -62,15 +62,16 @@ def build_tree_kernel_efficient(
     tree_mask_buf: Optional[torch.Tensor] = None,
     position_buf: Optional[torch.Tensor] = None,
 ):
-    parent_list, top_scores_index, draft_tokens = (
-        build_tree_kernel_efficient_preprocess(
-            verified_id,
-            score_list,
-            token_list,
-            parents_list,
-            num_verify_tokens,
-        )
-    )
+    # parent_list, top_scores_index, draft_tokens = (
+    #     build_tree_kernel_efficient_preprocess(
+    #         verified_id,
+    #         score_list,
+    #         token_list,
+    #         parents_list,
+    #         num_verify_tokens,
+    #     )
+    # )
+    draft_tokens = torch.tensor([0], dtype=torch.int32)
 
     # seq_lens_sum == sum(seq_lens); seq_lens: sequence length without draft tokens
     bs = seq_lens.numel()

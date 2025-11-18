@@ -15,7 +15,7 @@ def causal_conv1d_fwd(
     silu_activation: bool,
     pad_slot_id: int,
 ):
-    torch.ops.sgl_kernel.causal_conv1d_fwd(
+    torch.ops.sgl_kernel.causal_conv1d_fwd_cpu(
         x,
         weight,
         bias_,
@@ -25,6 +25,7 @@ def causal_conv1d_fwd(
         has_initial_state,
         silu_activation,
         pad_slot_id,
+        False,
     )
 
 
@@ -38,7 +39,7 @@ def causal_conv1d_update(
     conv_state_indices: Optional[torch.Tensor],
     pad_slot_id: int,
 ):
-    torch.ops.sgl_kernel.causal_conv1d_update(
+    torch.ops.sgl_kernel.causal_conv1d_update_ori(
         x,
         conv_state,
         weight,

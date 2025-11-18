@@ -1865,33 +1865,33 @@ at::Tensor fused_recurrent_gated_delta_rule_cpu(
   int64_t v_strideS = value.stride(0);
   int64_t v_strideB = value.stride(1);
   int64_t v_strideH = value.stride(2);
-  AT_DISPATCH_REDUCED_FLOATING_TYPES(query.scalar_type(), "fused_recurrent_gated_delta_rule_kernel_impl", [&] {
-    fused_recurrent_gated_delta_rule_kernel_impl<scalar_t>(
-        query_.data_ptr<scalar_t>(),
-        key_.data_ptr<scalar_t>(),
-        value.data_ptr<scalar_t>(),
-        g.data_ptr<float>(),
-        beta.data_ptr<scalar_t>(),
-        cache_indices.data_ptr<int32_t>(),
-        initial_state.data_ptr<float>(),
-        core_attn_out.data_ptr<scalar_t>(),
-        kv_mem.data_ptr<float>(),
-        seq_len,
-        batch_size,
-        num_heads,
-        head_dim,
-        v_num_heads,
-        v_head_dim,
-        q_strideB,
-        q_strideS,
-        q_strideH,
-        k_strideB,
-        k_strideS,
-        k_strideH,
-        v_strideB,
-        v_strideS,
-        v_strideH);
-  });
+  // AT_DISPATCH_REDUCED_FLOATING_TYPES(query.scalar_type(), "fused_recurrent_gated_delta_rule_kernel_impl", [&] {
+  //   fused_recurrent_gated_delta_rule_kernel_impl<scalar_t>(
+  //       query_.data_ptr<scalar_t>(),
+  //       key_.data_ptr<scalar_t>(),
+  //       value.data_ptr<scalar_t>(),
+  //       g.data_ptr<float>(),
+  //       beta.data_ptr<scalar_t>(),
+  //       cache_indices.data_ptr<int32_t>(),
+  //       initial_state.data_ptr<float>(),
+  //       core_attn_out.data_ptr<scalar_t>(),
+  //       kv_mem.data_ptr<float>(),
+  //       seq_len,
+  //       batch_size,
+  //       num_heads,
+  //       head_dim,
+  //       v_num_heads,
+  //       v_head_dim,
+  //       q_strideB,
+  //       q_strideS,
+  //       q_strideH,
+  //       k_strideB,
+  //       k_strideS,
+  //       k_strideH,
+  //       v_strideB,
+  //       v_strideS,
+  //       v_strideH);
+  // });
   return core_attn_out;
 }
 

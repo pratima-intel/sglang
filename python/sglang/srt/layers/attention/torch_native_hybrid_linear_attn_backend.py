@@ -434,7 +434,7 @@ class MambaAttnBackend(AttentionBackend):
         conv_packed_weights = kwargs["conv_packed_weights"]
         conv_states, ssm_states = self.req_to_token_pool.get_mamba_params(layer_id)
         cache_indices = self.forward_metadata.mamba_cache_indices
-        mixed_qkv = torch.ops.sgl_kernel.causal_conv1d_update_cpu(
+        mixed_qkv = torch.ops.sgl_kernel.causal_conv1d_update_cpu_ori(
             mixed_qkv,
             conv_states,
             conv_packed_weights,
@@ -489,17 +489,17 @@ class MambaAttnBackend(AttentionBackend):
         query_start_loc = self.forward_metadata.query_start_loc
         cache_indices = self.forward_metadata.mamba_cache_indices
         if is_target_verify:
-            print("MambaAttnBackend forward extend is_target_verify")
+            print("\nMambaAttnBackend forward extend is_target_verify")
             (
                 conv_states,
                 ssm_states,
                 mixed_qkv_cache,
                 intermediate_state_cache,
             ) = self.req_to_token_pool.get_mamba_params(layer_id)
-            print("mixed_qkv ", mixed_qkv.size()) # [4,8192], RuntimeError: shape '[-1, 4, 32, 128, 128]' is invalid for input of size 32768
-            mixed_qkv_cache[cache_indices] = mixed_qkv.view(
-                (-1,) + mixed_qkv_cache.shape[1:]
-            ).clone()
+            # print("mixed_qkv ", mixed_qkv.size()) # [4,8192], RuntimeError: shape '[-1, 4, 32, 128, 128]' is invalid for input of size 32768
+            # mixed_qkv_cache[cache_indices] = mixed_qkv.view(
+            #     (-1,) + mixed_qkv_cache.shape[1:]
+            # ).clone()
             has_initial_states = torch.ones(
                 seq_len // forward_batch.spec_info.draft_token_num,
                 dtype=torch.bool,
@@ -507,7 +507,7 @@ class MambaAttnBackend(AttentionBackend):
             )
             conv_states_to_use = conv_states.clone()
         else:
-            print("MambaAttnBackend forward extend not target_verify")
+            print("\nMambaAttnBackend forward extend not target_verify")
             conv_states, ssm_states, *rest = self.req_to_token_pool.get_mamba_params(
                 layer_id
             )
@@ -522,7 +522,7 @@ class MambaAttnBackend(AttentionBackend):
                 has_initial_states,
                 True,
                 self.pad_slot_id,
-                True).transpose(0, 1)[:seq_len]
+                False).transpose(0, 1)[:seq_len]
 
         key_split_dim = key_dim // attn_tp_size
         value_split_dim = value_dim // attn_tp_size
@@ -544,13 +544,15 @@ class MambaAttnBackend(AttentionBackend):
         beta = b.sigmoid()
         # g = torch_gdn_gating(A_log, a, dt_bias)
         g = self.fused_gdn_gating(A_log, a, dt_bias)
-        g = g.unsqueeze(0)
-        beta = beta.unsqueeze(0)
+        # g = g.unsqueeze(0)
+        # beta = beta.unsqueeze(0)
 
         if is_target_verify:
+            batch_size = query.shape[1]
+            cache_indices = cache_indices.expand(batch_size)
             core_attn_out = torch.ops.sgl_kernel.fused_recurrent_gated_delta_rule_cpu(
-                query,
-                key,
+                query.contiguous(),
+                key.contiguous(),
                 value,
                 g,
                 beta,
@@ -559,6 +561,8 @@ class MambaAttnBackend(AttentionBackend):
                 True,
             )
         else:
+            g = g.unsqueeze(0)
+            beta = beta.unsqueeze(0)
             recurrent_state = ssm_states[cache_indices]
             core_attn_out, last_recurrent_state = torch.ops.sgl_kernel.chunk_gated_delta_rule_cpu(
                 query=query.contiguous(),
@@ -790,13 +794,14 @@ class HybridLinearAttnBackend(AttentionBackend):
 
         # Batch SSM state updates (outside the loop for efficiency)
         valid_mask = accepted_length > 0
-        if intermediate_state_cache is not None:
-            last_steps = (accepted_length - 1).to(torch.int64)
-            valid_state_indices = state_indices_tensor[valid_mask].to(torch.int64)
+        # if intermediate_state_cache is not None:
+        #     last_steps = (accepted_length - 1).to(torch.int64)
+        #     valid_state_indices = state_indices_tensor[valid_mask].to(torch.int64)
+        #     print("valid_state_indices ", valid_state_indices, valid_state_indices.size())
 
-            ssm_states[:, valid_state_indices, :] = intermediate_state_cache[
-                :, valid_state_indices, last_steps
-            ].to(ssm_states.dtype)
+        #     ssm_states[:, valid_state_indices, :] = intermediate_state_cache[
+        #         :, valid_state_indices, last_steps
+        #     ].to(ssm_states.dtype)
 
         # For loop conv state updates (can be optimized)
         for i in range(len(model.model.layers)):
@@ -811,16 +816,16 @@ class HybridLinearAttnBackend(AttentionBackend):
                 conv_state = conv_states[layer_id]
                 mixed_qkv = mixed_qkvs[layer_id]
 
-                _ = causal_conv1d_fn(
-                    mixed_qkv.transpose(0, 1),
-                    conv_weights,
-                    layer.linear_attn.conv1d.bias,
-                    activation=layer.linear_attn.activation,
-                    conv_states=conv_state,
-                    has_initial_state=has_initial_states,
-                    cache_indices=state_indices_tensor,
-                    query_start_loc=query_start_loc,
-                )
+                # _ = causal_conv1d_fn(
+                #     mixed_qkv.transpose(0, 1),
+                #     conv_weights,
+                #     layer.linear_attn.conv1d.bias,
+                #     activation=layer.linear_attn.activation,
+                #     conv_states=conv_state,
+                #     has_initial_state=has_initial_states,
+                #     cache_indices=state_indices_tensor,
+                #     query_start_loc=query_start_loc,
+                # )
 
 @dataclass
 class MTPForwardMetadata:

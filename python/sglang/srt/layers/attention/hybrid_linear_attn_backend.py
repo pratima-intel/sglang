@@ -51,6 +51,7 @@ class MambaAttnBackend(AttentionBackend):
         return torch.arange(0, bs + 1, dtype=torch.int32, device=device)
 
     def init_forward_metadata(self, forward_batch: ForwardBatch):
+        forward_batch.spec_info.draft_token_num = 1
         bs = forward_batch.batch_size
         if forward_batch.forward_mode.is_decode_or_idle():
             query_start_loc = self._get_cached_arange(bs, str(self.device))
