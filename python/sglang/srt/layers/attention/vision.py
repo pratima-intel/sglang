@@ -19,6 +19,7 @@ from sglang.srt.utils import (
     get_bool_env_var,
     get_device_capability,
     is_blackwell,
+    is_cpu,
     is_cuda,
     is_hip,
     is_npu,
@@ -32,6 +33,7 @@ from sglang.srt.utils.multi_stream_utils import (
 _is_cuda = is_cuda()
 _is_npu = is_npu()
 _is_hip = is_hip()
+_is_cpu = is_cpu()
 
 if _is_cuda:
     from sgl_kernel.flash_attn import flash_attn_varlen_func
@@ -145,7 +147,7 @@ class VisionSdpaAttention(nn.Module):
     @staticmethod
     @lru_cache(maxsize=128)
     def _generate_mask_cache(
-        s: int, flatten_batch: bool, cu_seqlens: tuple
+        s: int, flatten_batch: bool, cu_seqlens: tuple, dtype=torch.bool
     ) -> torch.BoolTensor:
         """
         Generate a boolean attention mask with caching mechanism.
@@ -157,11 +159,11 @@ class VisionSdpaAttention(nn.Module):
             attention mask tensor of shape [b, 1, s, s] or [1, s, s]
         """
         if flatten_batch:
-            mask = torch.zeros([1, s, s], dtype=torch.bool)
+            mask = torch.zeros([1, s, s], dtype=dtype)
             for i in range(1, len(cu_seqlens)):
                 start = cu_seqlens[i - 1]
                 end = cu_seqlens[i]
-                mask[..., start:end, start:end] = True
+                mask[..., start:end, start:end] = 1
         else:
             # [1, 1, 1, s]
             row_indices = torch.arange(s).view(1, 1, 1, s)
@@ -181,6 +183,7 @@ class VisionSdpaAttention(nn.Module):
         s: int,
         cu_seqlens: Optional[torch.Tensor],
         flatten_batch: bool = False,
+        dtype=torch.bool,
     ) -> Optional[torch.Tensor]:
         r"""
         Creates a non-causal 4D mask of shape `(b, 1, s, s)` or `(1, 1, s, s)`.
@@ -196,7 +199,9 @@ class VisionSdpaAttention(nn.Module):
 
         cu_seqlens_tuple = tuple(cu_seqlens.cpu().tolist())
 
-        return self._generate_mask_cache(s, flatten_batch, cu_seqlens_tuple)
+        return self._generate_mask_cache(
+            s, flatten_batch, cu_seqlens_tuple, dtype=dtype
+        )
 
     def forward(
         self,
@@ -223,8 +228,12 @@ class VisionSdpaAttention(nn.Module):
 
         # [b, 1, s, s]
         if attention_mask is None:
+            if _is_cpu:
+                dtype = q.dtype
+            else:
+                dtype = torch.bool
             attention_mask = self.generate_patch_attention_mask(
-                s, cu_seqlens, flatten_batch=self.flatten_batch
+                s, cu_seqlens, flatten_batch=self.flatten_batch, dtype=dtype
             )
 
         if attention_mask is None:
