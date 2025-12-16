@@ -63,9 +63,9 @@ from sglang.srt.models.utils import (
 from sglang.srt.multimodal.mm_utils import run_dp_sharded_mrope_vision_model
 from sglang.srt.multimodal.vit_cuda_graph_runner import ViTCudaGraphRunner
 from sglang.srt.server_args import get_global_server_args
-from sglang.srt.utils import add_prefix, get_int_env_var, is_npu
+from sglang.srt.utils import add_prefix, get_int_env_var, is_npu, is_cpu
 from sglang.srt.utils.hf_transformers_utils import get_processor
-
+_is_cpu = is_cpu()
 logger = logging.getLogger(__name__)
 
 
@@ -313,8 +313,6 @@ class Qwen3VLMoeVisionModel(nn.Module, RotaryPosMixin):
         else:
             self.pos_embed = PPMissingLayer()
 
-        norm_layer = partial(nn.LayerNorm, eps=norm_eps)
-        head_dim = self.hidden_size // self.num_heads
         self.rotary_pos_emb = get_rope(
             head_size=head_dim,
             rotary_dim=head_dim // 2,
@@ -322,6 +320,13 @@ class Qwen3VLMoeVisionModel(nn.Module, RotaryPosMixin):
             base=10000.0,
             is_neox_style=True,
         )
+        if _is_cpu and hasattr(vision_config, "original_num_heads"):
+            head_dim = self.hidden_size // vision_config.original_num_heads
+            from sglang.srt.layers.layernorm import LayerNorm
+            norm_layer = partial(LayerNorm, eps=norm_eps, dtype=self.dtype)
+        else:
+            head_dim = self.hidden_size // self.num_heads
+            norm_layer = partial(nn.LayerNorm, eps=norm_eps)
 
         self.blocks = nn.ModuleList(
             [
