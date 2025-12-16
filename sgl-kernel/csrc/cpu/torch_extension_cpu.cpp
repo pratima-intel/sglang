@@ -277,6 +277,24 @@ at::Tensor causal_conv1d_update_cpu(
     const std::optional<at::Tensor>& conv_state_indices,
     int64_t pad_slot_id,
     bool is_vnni);
+// image preprocessor
+std::tuple<at::Tensor, at::Tensor> image_preprocess_cpu(
+    at::TensorList images,
+    bool do_convert_rgb,
+    bool do_resize,
+    int64_t shortest_edge,
+    int64_t longest_edge,
+    const std::string& interpolation,
+    bool do_rescale,
+    double rescale_factor,
+    bool do_normalize,
+    c10::ArrayRef<double> image_mean,
+    c10::ArrayRef<double> image_std,
+    int64_t patch_size,
+    int64_t temporal_patch_size,
+    int64_t merge_size,
+    bool disable_grouping,
+    at::ScalarType out_dtype);
 
 // shared memory init
 void initialize(int64_t size, int64_t rank);
@@ -471,6 +489,13 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
       "bool is_vnni, int[]? block_size, int q_lora_rank, int kv_lora_rank,"
       "int qk_rope_head_dim) -> (Tensor, Tensor, Tensor)");
   m.impl("qkv_proj_with_rope_fused_weight", torch::kCPU, &qkv_proj_with_rope_fused_weight);
+  // image preprocessor
+  m.def(
+      "image_preprocess_cpu(Tensor[] images, bool do_convert_rgb, bool do_resize, int shortest_edge, int longest_edge,"
+      "str interpolation, bool do_rescale, float rescale_factor, bool do_normalize, float[] image_mean, float[] "
+      "image_std, int patch_size, int temporal_patch_size, int merge_size, bool disable_grouping, ScalarType "
+      "out_dtype) -> (Tensor, Tensor)");
+  m.impl("image_preprocess_cpu", torch::kCPU, &image_preprocess_cpu);
 
   // shared expert
   m.def(
