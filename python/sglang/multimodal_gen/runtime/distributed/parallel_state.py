@@ -245,13 +245,13 @@ def init_distributed_environment(
         )
 
         # For MPS, don't pass device_id as it doesn't support device indices
-        extra_args = {} if current_platform.is_mps() else dict(device_id=device_id)
+        # extra_args = {} if current_platform.is_mps() else dict(device_id=device_id)
         torch.distributed.init_process_group(
             backend=backend,
             init_method=distributed_init_method,
             world_size=world_size,
             rank=rank,
-            **extra_args,
+            # **extra_args,
         )
     # set the local rank
     # local_rank is not available in torch ProcessGroup,
@@ -341,8 +341,9 @@ def initialize_model_parallel(
     ranks 8 to 15 belong to the second box.
     """
 
-    if backend is None:
-        backend = envs.get_torch_distributed_backend()
+    # if backend is None:
+    #     backend = envs.get_torch_distributed_backend()
+    backend = "gloo"    # gjn
     # Get world size and rank. Ensure some consistencies.
     assert torch.distributed.is_initialized()
     world_size: int = torch.distributed.get_world_size()
@@ -963,6 +964,7 @@ def is_pipeline_last_stage():
 
 # CFG
 def get_cfg_group() -> GroupCoordinator:
+    print("gjn is ")
     assert (
         _CFG is not None
     ), "classifier_free_guidance parallel group is not initialized"
@@ -971,11 +973,13 @@ def get_cfg_group() -> GroupCoordinator:
 
 def get_classifier_free_guidance_world_size():
     """Return world size for the classifier_free_guidance parallel group."""
+    return 1
     return get_cfg_group().world_size
 
 
 def get_classifier_free_guidance_rank():
     """Return my rank for the classifier_free_guidance parallel group."""
+    return 0
     return get_cfg_group().rank_in_group
 
 

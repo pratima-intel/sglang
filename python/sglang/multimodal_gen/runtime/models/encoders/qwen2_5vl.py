@@ -511,7 +511,7 @@ class Qwen2_5_VLModel(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.visual = Qwen2_5_VisionTransformerPretrainedModel._from_config(
-            config.vision_config
+            config.vision_config, device = "cpu"
         )
         self.language_model = Qwen2_5_VLTextModel(config.text_config)
         self.visual.to(torch.get_default_dtype())

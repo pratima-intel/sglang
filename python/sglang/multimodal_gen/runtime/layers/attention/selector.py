@@ -91,6 +91,12 @@ def get_attn_backend(
     dtype: torch.dtype,
     supported_attention_backends: set[AttentionBackendEnum] | None = None,
 ) -> type[AttentionBackend]:
+    # logger.info("Using Torch SDPA backend")
+    
+    attention_cls = "sglang.multimodal_gen.runtime.layers.attention.backends.flash_attn.FlashAttentionBackend"#"sglang.multimodal_gen.runtime.layers.attention.backends.sdpa.SDPABackend"
+    return cast(type[AttentionBackend], resolve_obj_by_qualname(attention_cls))
+
+    return SDPABackend() #AttentionBackendEnum.TORCH_SDPA # gjn
     if supported_attention_backends is not None:
         # Sort the backend names to ensure consistent cache key
         be_tuple = tuple(

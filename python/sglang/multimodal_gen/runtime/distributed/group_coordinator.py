@@ -43,6 +43,7 @@ _group_name_counter: dict[str, int] = {}
 
 
 def get_local_torch_device() -> torch.device:
+    return torch.device("cpu") # gjn
     """Return the torch device for the current rank."""
     from sglang.multimodal_gen.runtime.platforms import current_platform
 

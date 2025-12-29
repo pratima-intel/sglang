@@ -68,21 +68,21 @@ class GPUWorker:
     def init_device_and_model(self) -> None:
         """Initialize the device and load the model."""
         setproctitle(f"sgl_diffusion::scheduler_TP{self.local_rank}")
-        torch.cuda.set_device(self.local_rank)
+        # torch.cuda.set_device(self.local_rank)
         # Set environment variables for distributed initialization
         os.environ["MASTER_ADDR"] = "localhost"
         os.environ["MASTER_PORT"] = str(self.master_port)
         os.environ["LOCAL_RANK"] = str(self.local_rank)
         os.environ["RANK"] = str(self.rank)
         os.environ["WORLD_SIZE"] = str(self.server_args.num_gpus)
-        # Initialize the distributed environment
+        # # Initialize the distributed environment
         maybe_init_distributed_environment_and_model_parallel(
             tp_size=self.server_args.tp_size,
             enable_cfg_parallel=self.server_args.enable_cfg_parallel,
             ulysses_degree=self.server_args.ulysses_degree,
             ring_degree=self.server_args.ring_degree,
-            sp_size=self.server_args.sp_degree,
-            dp_size=self.server_args.dp_size,
+            sp_size=1, #self.server_args.sp_degree,
+            dp_size=1, #self.server_args.dp_size,
         )
 
         self.pipeline = build_pipeline(self.server_args)
@@ -165,7 +165,7 @@ def run_scheduler_process(
     """
     configure_logger(server_args)
     suppress_other_loggers()
-    set_cuda_arch()
+    # set_cuda_arch()
 
     port_args = PortArgs.from_server_args(server_args)
 

@@ -17,10 +17,11 @@ from sglang.multimodal_gen.configs.models.dits.qwenimage import QwenImageDitConf
 from sglang.multimodal_gen.runtime.layers.attention import USPAttention
 from sglang.multimodal_gen.runtime.layers.layernorm import LayerNorm, RMSNorm
 from sglang.multimodal_gen.runtime.layers.linear import ReplicatedLinear
-from sglang.multimodal_gen.runtime.layers.triton_ops import (
-    apply_rotary_embedding,
-    fuse_scale_shift_kernel,
-)
+# gjn
+# from sglang.multimodal_gen.runtime.layers.triton_ops import (
+#     apply_rotary_embedding,
+#     fuse_scale_shift_kernel,
+# )
 from sglang.multimodal_gen.runtime.models.dits.base import CachableDiT
 from sglang.multimodal_gen.runtime.models.dits.utils import (
     delete_projection_layers,
@@ -258,7 +259,183 @@ class QwenEmbedRope(nn.Module):
         )
         return freqs.clone().contiguous()
 
+def apply_rotary_emb_qwen(
+    x: torch.Tensor,
+    freqs_cis: Union[torch.Tensor, Tuple[torch.Tensor]],
+    use_real: bool = True,
+    use_real_unbind_dim: int = -1,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Apply rotary embeddings to input tensors using the given frequency tensor. This function applies rotary embeddings
+    to the given query or key 'x' tensors using the provided frequency tensor 'freqs_cis'. The input tensors are
+    reshaped as complex numbers, and the frequency tensor is reshaped for broadcasting compatibility. The resulting
+    tensors contain rotary embeddings and are returned as real tensors.
 
+    Args:
+        x (`torch.Tensor`):
+            Query or key tensor to apply rotary embeddings. [B, S, H, D] xk (torch.Tensor): Key tensor to apply
+        freqs_cis (`Tuple[torch.Tensor]`): Precomputed frequency tensor for complex exponentials. ([S, D], [S, D],)
+
+    Returns:
+        Tuple[torch.Tensor, torch.Tensor]: Tuple of modified query tensor and key tensor with rotary embeddings.
+    """
+    if use_real:
+        cos, sin = freqs_cis  # [S, D]
+        cos = cos[None, None]
+        sin = sin[None, None]
+        cos, sin = cos.to(x.device), sin.to(x.device)
+
+        if use_real_unbind_dim == -1:
+            # Used for flux, cogvideox, hunyuan-dit
+            x_real, x_imag = x.reshape(*x.shape[:-1], -1, 2).unbind(-1)  # [B, S, H, D//2]
+            x_rotated = torch.stack([-x_imag, x_real], dim=-1).flatten(3)
+        elif use_real_unbind_dim == -2:
+            # Used for Stable Audio, OmniGen, CogView4 and Cosmos
+            x_real, x_imag = x.reshape(*x.shape[:-1], 2, -1).unbind(-2)  # [B, S, H, D//2]
+            x_rotated = torch.cat([-x_imag, x_real], dim=-1)
+        else:
+            raise ValueError(f"`use_real_unbind_dim={use_real_unbind_dim}` but should be -1 or -2.")
+
+        out = (x.float() * cos + x_rotated.float() * sin).to(x.dtype)
+
+        return out
+    else:
+        print(x.shape)
+        x_rotated = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2))
+        freqs_cis = freqs_cis.unsqueeze(1)
+        print(x_rotated.shape)
+        print(freqs_cis.shape)
+        x_out = torch.view_as_real(x_rotated * freqs_cis).flatten(3)
+
+        return x_out.type_as(x)
+# Copied from transformers
+def rotate_half(x):
+    """Rotates half the hidden dims of the input."""
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2 :]
+    return torch.cat((-x2, x1), dim=-1)
+
+def apply_rotary_pos_emb_native(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    unsqueeze_dim=1,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    orig_q_dtype = q.dtype
+    orig_k_dtype = k.dtype
+    q, k = q.float(), k.float()
+
+    q_rotated = torch.view_as_complex(q.float().reshape(*q.shape[:-1], -1, 2))
+    k_rotated = torch.view_as_complex(k.float().reshape(*k.shape[:-1], -1, 2))
+    q_rotated = q_rotated.squeeze(0)
+    k_rotated = k_rotated.squeeze(0)
+
+    # embedding is performed in float
+    cos = cos.unsqueeze(unsqueeze_dim).float()
+    sin = sin.unsqueeze(unsqueeze_dim).float()
+    q_embed = (q_rotated * cos) + (rotate_half(q_rotated) * sin)
+    k_embed = (k_rotated * cos) + (rotate_half(k_rotated) * sin)
+
+    q_embed = q_embed.to(orig_q_dtype).unsqueeze(0)
+    k_embed = k_embed.to(orig_k_dtype).unsqueeze(0)
+    return q_embed.flatten(3), k_embed.flatten(3)
+    return q_embed.unsqueeze(0), k_embed.unsqueeze(0)
+def apply_rotary_embedding_pytorch(
+    x: torch.Tensor, 
+    cos: torch.Tensor, 
+    sin: torch.Tensor, 
+    interleaved: bool = False
+) -> torch.Tensor:
+    """
+    PyTorch版本的rotary embedding实现，替代Triton kernel
+    
+    Args:
+        x: 输入张量，形状为 [..., num_heads, head_size]
+        cos: 余弦值张量，形状为 [num_tokens, head_size_half]
+        sin: 正弦值张量，形状为 [num_tokens, head_size_half]
+        interleaved: 是否使用interleaved模式
+    
+    Returns:
+        应用rotary embedding后的输出张量，形状与x相同
+    """
+    # 保存原始形状
+    original_shape = x.shape
+    
+    # 处理不同的输入维度
+    if x.dim() == 4:
+        bsz, num_tokens, num_heads, head_size = x.shape
+        x_flat = x.view(bsz * num_tokens * num_heads, head_size)
+    elif x.dim() == 3:
+        num_tokens, num_heads, head_size = x.shape
+        bsz = 1
+        x_flat = x.view(num_tokens * num_heads, head_size)
+    else:
+        raise ValueError(f"Unsupported input dimension: {x.dim()}")
+    
+    # 确保head_size是偶数
+    assert head_size % 2 == 0, "head_size must be divisible by 2"
+    head_size_half = head_size // 2
+    
+    # 处理cos和sin的形状
+    if interleaved:
+        if cos.shape[-1] == head_size:
+            # 如果cos/sin包含完整head_size，只取偶数位置
+            cos = cos[..., ::2].contiguous()
+            sin = sin[..., ::2].contiguous()
+    
+    cos = cos.contiguous()
+    sin = sin.contiguous()
+    
+    # 创建正确的token索引
+    # 每个 (batch, token, head) 组合对应一个token索引
+    total_rows = bsz * num_tokens * num_heads
+    
+    # 创建token索引：每个batch中，每个token重复num_heads次
+    token_indices = torch.arange(num_tokens, device=x.device)
+    token_indices = token_indices.repeat(bsz)  # [bsz * num_tokens]
+    token_indices = token_indices.repeat_interleave(num_heads)  # [bsz * num_tokens * num_heads]
+    
+    # 确保索引数量匹配
+    assert token_indices.shape[0] == total_rows, \
+        f"token_indices shape {token_indices.shape} doesn't match total_rows {total_rows}"
+    
+    # 从cos和sin中获取对应的值
+    cos_selected = cos[token_indices]  # [total_rows, head_size_half]
+    sin_selected = sin[token_indices]  # [total_rows, head_size_half]
+    
+    output = torch.empty_like(x_flat)
+    
+    # 分割x为两部分
+    if interleaved:
+        # interleaved模式：x1 = 偶数索引，x2 = 奇数索引
+        x1 = x_flat[:, 0::2]  # [..., head_size_half]
+        x2 = x_flat[:, 1::2]  # [..., head_size_half]
+    else:
+        # 非interleaved模式：前半部分和后半部分
+        x1 = x_flat[:, :head_size_half]
+        x2 = x_flat[:, head_size_half:]
+    
+    # 应用rotary embedding公式
+    # o1 = x1 * cos - x2 * sin
+    # o2 = x1 * sin + x2 * cos
+    o1 = x1 * cos_selected - x2 * sin_selected
+    o2 = x1 * sin_selected + x2 * cos_selected
+    
+    # 合并结果
+    if interleaved:
+        # interleaved模式：交替放置o1和o2
+        output[:, 0::2] = o1
+        output[:, 1::2] = o2
+    else:
+        # 非interleaved模式：前半部分放o1，后半部分放o2
+        output[:, :head_size_half] = o1
+        output[:, head_size_half:] = o2
+    
+    # 恢复原始形状
+    output = output.reshape(*original_shape)
+    
+    return output
 class QwenImageCrossAttention(nn.Module):
     _supports_qkv_fusion = True
 
@@ -398,19 +575,26 @@ class QwenImageCrossAttention(nn.Module):
         # Apply RoPE
         if image_rotary_emb is not None:
             (img_cos, img_sin), (txt_cos, txt_sin) = image_rotary_emb
-            img_query = apply_rotary_embedding(
+            img_query = apply_rotary_embedding_pytorch(
                 img_query, img_cos, img_sin, interleaved=True
             )
-            img_key = apply_rotary_embedding(
+            img_key = apply_rotary_embedding_pytorch(
                 img_key, img_cos, img_sin, interleaved=True
             )
-            txt_query = apply_rotary_embedding(
+            txt_query = apply_rotary_embedding_pytorch(
                 txt_query, txt_cos, txt_sin, interleaved=True
             )
-            txt_key = apply_rotary_embedding(
+            txt_key = apply_rotary_embedding_pytorch(
                 txt_key, txt_cos, txt_sin, interleaved=True
             )
-
+            # img_freqs, txt_freqs = image_rotary_emb
+            # img_query = apply_rotary_emb_qwen(img_query, torch.cat([img_freqs[0], img_freqs[1]], dim=-1), use_real=False)
+            # img_key = apply_rotary_emb_qwen(img_key, torch.cat([img_freqs[0], img_freqs[1]], dim=-1), use_real=False)
+            # txt_query = apply_rotary_emb_qwen(txt_query, torch.cat([txt_freqs[0], txt_freqs[1]], dim=-1), use_real=False)
+            # txt_key = apply_rotary_emb_qwen(txt_key,  torch.cat([txt_freqs[0], txt_freqs[1]], dim=-1), use_real=False)
+            # (img_cos, img_sin), (txt_cos, txt_sin) = image_rotary_emb
+            # img_query, img_key = apply_rotary_pos_emb_native(img_query, img_key, img_cos, img_sin)
+            # txt_query, txt_key = apply_rotary_pos_emb_native(txt_query, txt_key, txt_cos, txt_sin)
         # Concatenate for joint attention
         # Order: [text, image]
         joint_query = torch.cat([txt_query, img_query], dim=1)
@@ -492,11 +676,46 @@ class QwenImageTransformerBlock(nn.Module):
             dim=dim, dim_out=dim, activation_fn="gelu-approximate"
         )
 
-    def _modulate(self, x, mod_params):
+    def _modulate_triton(self, x, mod_params):
         """Apply modulation to input tensor"""
         shift, scale, gate = mod_params.chunk(3, dim=-1)
         return fuse_scale_shift_kernel(x, scale, shift), gate.unsqueeze(1)
+    
+    def _modulate(self, x, mod_params, index=None):
+        """Apply modulation to input tensor"""
+        # x: b l d, shift: b d, scale: b d, gate: b d
+        shift, scale, gate = mod_params.chunk(3, dim=-1)
 
+        if index is not None:
+            # Assuming mod_params batch dim is 2*actual_batch (chunked into 2 parts)
+            # So shift, scale, gate have shape [2*actual_batch, d]
+            actual_batch = shift.size(0) // 2
+            shift_0, shift_1 = shift[:actual_batch], shift[actual_batch:]  # each: [actual_batch, d]
+            scale_0, scale_1 = scale[:actual_batch], scale[actual_batch:]
+            gate_0, gate_1 = gate[:actual_batch], gate[actual_batch:]
+
+            # index: [b, l] where b is actual batch size
+            # Expand to [b, l, 1] to match feature dimension
+            index_expanded = index.unsqueeze(-1)  # [b, l, 1]
+
+            # Expand chunks to [b, 1, d] then broadcast to [b, l, d]
+            shift_0_exp = shift_0.unsqueeze(1)  # [b, 1, d]
+            shift_1_exp = shift_1.unsqueeze(1)  # [b, 1, d]
+            scale_0_exp = scale_0.unsqueeze(1)
+            scale_1_exp = scale_1.unsqueeze(1)
+            gate_0_exp = gate_0.unsqueeze(1)
+            gate_1_exp = gate_1.unsqueeze(1)
+
+            # Use torch.where to select based on index
+            shift_result = torch.where(index_expanded == 0, shift_0_exp, shift_1_exp)
+            scale_result = torch.where(index_expanded == 0, scale_0_exp, scale_1_exp)
+            gate_result = torch.where(index_expanded == 0, gate_0_exp, gate_1_exp)
+        else:
+            shift_result = shift.unsqueeze(1)
+            scale_result = scale.unsqueeze(1)
+            gate_result = gate.unsqueeze(1)
+
+        return x * (1 + scale_result) + shift_result, gate_result
     def forward(
         self,
         hidden_states: torch.Tensor,

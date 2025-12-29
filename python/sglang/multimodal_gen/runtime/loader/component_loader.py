@@ -125,6 +125,7 @@ class ComponentLoader(ABC):
         return True
 
     def target_device(self, should_offload):
+        return torch.device("cpu") # gjn
         if should_offload:
             return (
                 torch.device("mps")
@@ -166,6 +167,7 @@ class ComponentLoader(ABC):
             )
             should_offload = self.should_offload(server_args)
             target_device = self.target_device(should_offload)
+            print(target_device)
             component = component.to(device=target_device)
             source = "native"
             logger.warning(
@@ -418,7 +420,7 @@ class TextEncoderLoader(ComponentLoader):
         # Determine CPU offload behavior and target device
 
         local_torch_device = get_local_torch_device()
-        should_offload = self.should_offload(server_args, model_config)
+        should_offload = False # gjn self.should_offload(server_args, model_config)
         with set_default_torch_dtype(PRECISION_TO_TYPE[dtype]):
             with local_torch_device, skip_init_modules():
                 architectures = getattr(model_config, "architectures", [])
