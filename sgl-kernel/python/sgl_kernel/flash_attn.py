@@ -3,12 +3,12 @@ from typing import Optional, Union
 
 import torch
 
-try:
-    from sgl_kernel import flash_ops
-except:
-    raise ImportError(
-        "Can not import FA3 in sgl_kernel. Please check your installation."
-    )
+# try:
+#     from sgl_kernel import flash_ops
+# except:
+#     raise ImportError(
+#         "Can not import FA3 in sgl_kernel. Please check your installation."
+#     )
 
 try:
     from ._fa4_interface import flash_attn_varlen_func as flash_attn_varlen_func_v4
@@ -262,6 +262,53 @@ def flash_attn_with_kvcache(
 
 
 def flash_attn_varlen_func(
+    q,
+    k,
+    v,
+    cu_seqlens_q,
+    cu_seqlens_k,
+    max_seqlen_q=None,
+    max_seqlen_k=None,
+    seqused_q=None,
+    seqused_k=None,
+    page_table=None,
+    softmax_scale=None,
+    causal=False,
+    qv=None,
+    q_descale=None,
+    k_descale=None,
+    v_descale=None,
+    window_size=(-1, -1),
+    attention_chunk=0,
+    softcap=0.0,
+    num_splits=1,
+    pack_gqa=None,
+    sm_margin=0,
+    return_softmax_lse=False,
+    sinks=None,
+    ver=3,
+):
+    # print("q shape", q.shape)
+    # print("k shape", k.shape)
+    # print("v shape", v.shape)
+    # print("q device", q.device)
+    # print("k device", k.device)
+    # print("v device", v.device)
+    # print(cu_seqlens_q)
+    # print(cu_seqlens_k)
+    # print(max_seqlen_q)
+    # print(max_seqlen_k)
+    # print(causal)
+    q_1 = q[0]
+    k_1 = k[0]
+    v_1 = v[0]
+    # print("flash_attn_varlen_func...")
+    res = torch.ops.sgl_kernel.flash_attn_varlen_func(q_1,k_1,v_1,torch.tensor([0, max_seqlen_q]).to(torch.int), torch.tensor([0, max_seqlen_k]).to(torch.int), max_seqlen_q, max_seqlen_k, causal)
+    res = res.unsqueeze(0)
+    # print(res.shape)
+    return res
+
+def flash_attn_varlen_func_cuda(
     q,
     k,
     v,
