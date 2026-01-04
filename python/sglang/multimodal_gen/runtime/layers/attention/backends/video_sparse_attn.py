@@ -7,10 +7,10 @@ from dataclasses import dataclass
 
 import torch
 
-try:
-    from vsa import video_sparse_attn
-except ImportError:
-    video_sparse_attn = None
+# try:
+#     from vsa import video_sparse_attn
+# except ImportError:
+video_sparse_attn = None
 
 from typing import Any
 
