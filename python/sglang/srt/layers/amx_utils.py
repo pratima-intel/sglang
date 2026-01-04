@@ -7,11 +7,14 @@ from sglang.srt.utils import cpu_has_amx_support
 logger = logging.getLogger(__name__)
 
 
-def amx_process_weight_after_loading(weight):
+def amx_process_weight_after_loading(weight, is_conv3d=False):
     if weight.device != torch.device("cpu"):
         return weight
     if not cpu_has_amx_support():
         return weight
+
+    if is_conv3d:
+        return torch.ops.sgl_kernel.conv3d_embed_weight_pack(weight)
 
     return torch.ops.sgl_kernel.convert_weight_packed(weight)
 
@@ -31,7 +34,7 @@ def dim_is_supported(weight):
 
 
 def _amx_process_weight_after_loading(
-    module, weight_names, transpose_dims=None
+    module, weight_names, transpose_dims=None, is_conv3d=False
 ) -> None:
     # Pack weight for get better performance on CPU
     devices = {getattr(module, weight_name).device for weight_name in weight_names}
@@ -50,7 +53,7 @@ def _amx_process_weight_after_loading(
             weight_tensor = weight_tensor.transpose(*transpose_dims[i])
 
         # We don't pack weight or use intel amx backend if any weight of this module has unsupported dim.
-        if not dim_is_supported(weight_tensor):
+        if (not dim_is_supported(weight_tensor)) and (not is_conv3d):
             logger.warning(
                 f"Unsupported dimension for prepacking for weight '{weight_name}' with shape {weight_tensor.shape} in {module}. "
                 f"The derived (OC, IC) dimensions must be divisible by (16, 32). "
@@ -59,7 +62,7 @@ def _amx_process_weight_after_loading(
             return
 
         packed_weight = torch.nn.Parameter(
-            amx_process_weight_after_loading(weight_tensor),
+            amx_process_weight_after_loading(weight_tensor, is_conv3d=is_conv3d),
             requires_grad=False,
         )
         packed_weight.__dict__ = weight_tensor.__dict__
@@ -74,15 +77,21 @@ def _amx_process_weight_after_loading(
         and hasattr(module, "bias")
         and module.bias is not None
     ):
-        module.bias = torch.nn.Parameter(module.bias.data.float(), requires_grad=False)
+        if is_conv3d:
+            module.bias = torch.nn.Parameter(module.bias.data, requires_grad=False)
+        else:
+            module.bias = torch.nn.Parameter(
+                module.bias.data.float(), requires_grad=False
+            )
 
 
 class PackWeightMethod:
-    def __init__(self, weight_names, transpose_dims=None):
+    def __init__(self, weight_names, transpose_dims=None, is_conv3d=False):
         self.weight_names = weight_names
         self.transpose_dims = transpose_dims
+        self.is_conv3d = is_conv3d
 
     def process_weights_after_loading(self, module) -> None:
         _amx_process_weight_after_loading(
-            module, self.weight_names, self.transpose_dims
+            module, self.weight_names, self.transpose_dims, self.is_conv3d
         )
