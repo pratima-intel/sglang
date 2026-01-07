@@ -15,6 +15,17 @@ BLOCK_N, BLOCK_K = 64, 128
 factor_for_scale = 1e-3
 fp8_max, fp8_min = 400, -400
 
+def parametrize(**params):
+    def decorator(func):
+        def wrapper(self):
+            for combo in itertools.product(*params.values()):
+                kwargs = dict(zip(params.keys(), combo))
+                with self.subTest(**kwargs):
+                    func(self, **kwargs)
+
+        return wrapper
+
+    return decorator
 
 def parametrize(**params):
     def decorator(func):

@@ -128,6 +128,16 @@ std::tuple<at::Tensor, at::Tensor> chunk_gated_delta_rule_cpu(
     bool head_first,
     bool use_qk_l2norm_in_kernel,
     double eps = 1e-5);
+// flash attention
+at::Tensor flash_attn_varlen_func(
+    const at::Tensor& q,
+    const at::Tensor& k,
+    const at::Tensor& v,
+    const at::Tensor& cu_seqlens_q,
+    const at::Tensor& cu_seqlens_k,
+    int64_t max_seqlen_q,
+    int64_t max_seqlen_k,
+    bool causal);
 
 // weight prepack
 at::Tensor convert_weight_packed(at::Tensor& weight);
@@ -430,6 +440,11 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
       "Tensor initial_state, bool output_final_state, Tensor cu_seqlens, bool head_first, "
       "bool use_qk_l2norm_in_kernel, float eps=1e-5) -> (Tensor, Tensor)");
   m.impl("chunk_gated_delta_rule_cpu", torch::kCPU, &chunk_gated_delta_rule_cpu);
+  // flash attn
+  m.def(
+      "flash_attn_varlen_func(Tensor q, Tensor k, Tensor v, Tensor cu_seqlens_q, Tensor cu_seqlens_k, "
+      "int max_seqlen_q, int max_seqlen_k, bool causal) -> Tensor");
+  m.impl("flash_attn_varlen_func", torch::kCPU, &flash_attn_varlen_func);
 
   // weight prepack
   m.def("convert_weight_packed(Tensor weight) -> Tensor");
