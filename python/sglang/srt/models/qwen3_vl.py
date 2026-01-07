@@ -64,13 +64,14 @@ from sglang.srt.models.utils import (
 from sglang.srt.multimodal.mm_utils import run_dp_sharded_mrope_vision_model
 from sglang.srt.multimodal.vit_cuda_graph_runner import ViTCudaGraphRunner
 from sglang.srt.server_args import get_global_server_args
-from sglang.srt.utils import add_prefix, get_int_env_var, is_npu, is_cpu
+from sglang.srt.utils import add_prefix, get_int_env_var, is_npu, is_cpu, cpu_has_amx_support
 from sglang.srt.utils.hf_transformers_utils import get_processor
 logger = logging.getLogger(__name__)
 
 
 # === Vision Encoder === #
 _is_cpu = is_cpu()
+_is_cpu_amx_available = cpu_has_amx_support()
 
 
 class Qwen3_VisionMLP(nn.Module):
@@ -154,7 +155,6 @@ class Qwen3_VisionBlock(nn.Module):
         self,
         dim: int,
         num_heads: int,
-        head_size: int,
         intermediate_dim: int,
         hidden_act="silu",
         norm_layer: Optional[Callable[[int], nn.Module]] = None,
@@ -171,7 +171,6 @@ class Qwen3_VisionBlock(nn.Module):
         self.attn = VisionAttention(
             embed_dim=dim,
             num_heads=num_heads,
-            head_size=head_size,
             projection_size=dim,
             use_qkv_parallel=True,
             proj_bias=True,
@@ -330,17 +329,14 @@ class Qwen3VLMoeVisionModel(nn.Module, RotaryPosMixin):
         else:
             head_dim = self.hidden_size // self.num_heads
             norm_layer = partial(nn.LayerNorm, eps=norm_eps)
-
         self.blocks = nn.ModuleList(
             [
                 Qwen3_VisionBlock(
                     dim=self.hidden_size,
                     num_heads=self.num_heads,
-                    head_size=head_dim,
                     intermediate_dim=vision_config.intermediate_size,
                     hidden_act=vision_config.hidden_act,
                     norm_layer=norm_layer,
-                    attn_implementation="flash_attention_3" if not _is_cpu else "sdpa",
                     quant_config=quant_config,
                     prefix=add_prefix(f"blocks.{layer_idx}", prefix),
                     use_data_parallel=use_data_parallel,

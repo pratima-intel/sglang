@@ -47,9 +47,10 @@ from sglang.srt.models.qwen3_vl_moe import (
     Qwen3VLMoeForConditionalGeneration,
     load_fused_expert_weights,
 )
-from sglang.srt.utils import add_prefix, is_cpu, logger, is_npu
+from sglang.srt.utils import add_prefix, is_cpu, logger, is_npu, cpu_has_amx_support
 
 _is_cpu = is_cpu()
+_is_cpu_amx_available = cpu_has_amx_support()
 
 
 class Qwen3OmniMoeAudioEncoderLayer(nn.Module):
@@ -67,6 +68,11 @@ class Qwen3OmniMoeAudioEncoderLayer(nn.Module):
         if _is_cpu and hasattr(config, "original_encoder_attention_heads"):
             head_size = embed_dim // config.original_encoder_attention_heads
             projection_size = config.encoder_attention_heads * head_size
+        qkv_backend = "fa3"
+        if _is_cpu and _is_cpu_amx_available:
+            qkv_backend = "amx_attn"
+        elif _is_cpu:
+            qkv_backend = "sdpa"
         self.self_attn = VisionAttention(
             embed_dim=embed_dim,
             num_heads=config.encoder_attention_heads,
@@ -74,7 +80,7 @@ class Qwen3OmniMoeAudioEncoderLayer(nn.Module):
             projection_size=projection_size,
             use_qkv_parallel=True,
             proj_bias=True,
-            qkv_backend="fa3" if not _is_cpu else "sdpa",
+            qkv_backend=qkv_backend,
             softmax_in_single_precision=False,
             flatten_batch=True,
             quant_config=quant_config,
