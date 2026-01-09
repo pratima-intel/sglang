@@ -1096,7 +1096,7 @@ class GptOssForCausalLM(nn.Module):
                             if (
                                 _is_cpu
                                 and full_shard_size > loaded_weight.size(0)
-                                and start >= loaded_weight.size(0)
+                                and start + param.numel() >= loaded_weight.size(0)
                             ):
                                 pad_size = start + param.numel() - loaded_weight.size(0)
                                 pad_tensor = torch.zeros(pad_size).to(
