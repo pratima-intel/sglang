@@ -311,7 +311,6 @@ class Qwen3VLMoeVisionModel(nn.Module, RotaryPosMixin):
                     intermediate_dim=vision_config.intermediate_size,
                     hidden_act=vision_config.hidden_act,
                     norm_layer=norm_layer,
-                    attn_implementation=attn_implementation,
                     quant_config=quant_config,
                     prefix=add_prefix(f"blocks.{layer_idx}", prefix),
                     use_data_parallel=use_data_parallel,

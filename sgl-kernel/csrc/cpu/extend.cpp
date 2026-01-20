@@ -1,7 +1,6 @@
 #include "common.h"
 #include "flash_attn.h"
 #include "gemm.h"
-
 namespace {
 
 // [NOTE]: extend attention for CPU
