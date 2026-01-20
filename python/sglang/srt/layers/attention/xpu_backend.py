@@ -390,6 +390,7 @@ class XPUAttentionBackend(AttentionBackend):
         k_rope: Optional[torch.Tensor] = None,
         sinks: Optional[torch.Tensor] = None,
     ):
+        q = q * layer.scaling  # WD: apply scaling to q first, below sdpa scaling is 1.0
         if k is not None:
             assert v is not None
             if save_kv_cache:
@@ -506,7 +507,7 @@ class XPUAttentionBackend(AttentionBackend):
                 cu_seqlens_q=cu_seqlens_q,
                 cu_seqlens_k_new=cu_seqlens_k if not use_local_attn else None,
                 max_seqlen_q=max_seqlen_q,
-                softmax_scale=layer.scaling,
+                softmax_scale=1.0, # WD: q = q* scaling,
                 causal=False if use_cascade_attn else causal,
                 window_size=window_size,
                 softcap=layer.logit_cap,
@@ -527,7 +528,7 @@ class XPUAttentionBackend(AttentionBackend):
                     cu_seqlens_q=self.forward_metadata_spec_decode_expand.cu_seqlens_q,
                     cu_seqlens_k_new=self.forward_metadata_spec_decode_expand.cu_seqlens_k,
                     max_seqlen_q=self.forward_metadata_spec_decode_expand.max_seq_len_q,
-                    softmax_scale=layer.scaling,
+                    softmax_scale=1.0, # WD: q = q* scaling,
                     causal=False,
                     window_size=window_size,
                     softcap=layer.logit_cap,
@@ -570,7 +571,7 @@ class XPUAttentionBackend(AttentionBackend):
                         cu_seqlens_k=forward_batch.prefix_chunk_cu_seq_lens[chunk_idx],
                         max_seqlen_q=metadata.max_seq_len_q,
                         max_seqlen_k=forward_batch.prefix_chunk_max_seq_lens[chunk_idx],
-                        softmax_scale=layer.scaling,
+                        softmax_scale=1.0, # WD: q = q* scaling,
                         causal=False,
                         return_softmax_lse=True,
                     )
@@ -584,7 +585,7 @@ class XPUAttentionBackend(AttentionBackend):
                         cu_seqlens_k=metadata.cu_seqlens_q,
                         max_seqlen_q=metadata.max_seq_len_q,
                         max_seqlen_k=metadata.max_seq_len_q,
-                        softmax_scale=layer.scaling,
+                        softmax_scale=1.0, # WD: q = q* scaling,
                         causal=True,
                         return_softmax_lse=forward_batch.mha_return_lse,
                     )
@@ -629,13 +630,14 @@ class XPUAttentionBackend(AttentionBackend):
                     cu_seqlens_q=cu_seqlens_q,
                     cu_seqlens_k_new=cu_seqlens_k if not use_local_attn else None,
                     max_seqlen_q=max_seqlen_q,
-                    softmax_scale=layer.scaling,
+                    softmax_scale=1.0, # WD: q = q* scaling,
                     causal=False if use_cascade_attn else causal,
                     softcap=layer.logit_cap,
                     k_descale=k_descale,
                     v_descale=v_descale,
                     return_softmax_lse=use_cascade_attn,
                 )
+
                 if use_cascade_attn:
                     o, softmax_lse, *rest = result
                     o_expand, softmax_lse_expand, *rest_expand = (
@@ -649,7 +651,7 @@ class XPUAttentionBackend(AttentionBackend):
                             cu_seqlens_q=self.forward_metadata_spec_decode_expand.cu_seqlens_q,
                             cu_seqlens_k_new=self.forward_metadata_spec_decode_expand.cu_seqlens_k,
                             max_seqlen_q=self.forward_metadata_spec_decode_expand.max_seq_len_q,
-                            softmax_scale=layer.scaling,
+                            softmax_scale=1.0, # WD: q = q* scaling,
                             causal=False,
                             window_size=window_size,
                             softcap=layer.logit_cap,
@@ -682,6 +684,7 @@ class XPUAttentionBackend(AttentionBackend):
         k_rope: Optional[torch.Tensor] = None,
         sinks: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+        q = q * layer.scaling # WD: apply scaling to q first, below sdpa scaling is 1.0
         if k is not None:
             assert v is not None
             if save_kv_cache:
@@ -767,7 +770,7 @@ class XPUAttentionBackend(AttentionBackend):
                     cu_seqlens_q=metadata.cu_seqlens_q,
                     cu_seqlens_k_new=metadata.encoder_cu_seqlens_k,
                     max_seqlen_q=1,
-                    softmax_scale=layer.scaling,
+                    softmax_scale=1.0, # WD: q = q* scaling,
                     causal=False,
                     window_size=(-1, -1),
                     softcap=layer.logit_cap,
@@ -786,7 +789,7 @@ class XPUAttentionBackend(AttentionBackend):
                     cu_seqlens_q=local_attn_metadata.local_query_start_loc,
                     cu_seqlens_k_new=None,
                     max_seqlen_q=local_attn_metadata.local_max_query_len,
-                    softmax_scale=layer.scaling,
+                    softmax_scale=1.0, # WD: q = q* scaling
                     causal=True,
                     window_size=(-1, -1),
                     softcap=layer.logit_cap,
@@ -813,7 +816,7 @@ class XPUAttentionBackend(AttentionBackend):
                     cu_seqlens_q=metadata.cu_seqlens_q,
                     cu_seqlens_k_new=cu_seqlens_k,
                     max_seqlen_q=max_seqlen_q,
-                    softmax_scale=layer.scaling,
+                    softmax_scale=1.0, # WD: q = q* scaling
                     causal=False if use_cascade_attn else causal,
                     window_size=window_size,
                     softcap=layer.logit_cap,
@@ -834,7 +837,7 @@ class XPUAttentionBackend(AttentionBackend):
                             cu_seqlens_q=self.forward_metadata_spec_decode_expand.cu_seqlens_q,
                             cu_seqlens_k_new=self.forward_metadata_spec_decode_expand.cu_seqlens_k,
                             max_seqlen_q=self.forward_metadata_spec_decode_expand.max_seq_len_q,
-                            softmax_scale=layer.scaling,
+                            softmax_scale=1.0, # WD: q = q* scaling,
                             causal=False,
                             window_size=window_size,
                             softcap=layer.logit_cap,
@@ -890,7 +893,7 @@ class XPUAttentionBackend(AttentionBackend):
                 cu_seqlens_q=metadata.cu_seqlens_q,
                 cu_seqlens_k_new=metadata.cu_seqlens_k,
                 max_seqlen_q=max_seqlen_q,
-                softmax_scale=layer.scaling,
+                softmax_scale=1.0, # WD: q = q* scaling,
                 causal=False if use_cascade_attn else causal,
                 softcap=layer.logit_cap,
                 k_descale=k_descale,
@@ -909,7 +912,7 @@ class XPUAttentionBackend(AttentionBackend):
                     cu_seqlens_q=self.forward_metadata_spec_decode_expand.cu_seqlens_q,
                     cu_seqlens_k_new=self.forward_metadata_spec_decode_expand.cu_seqlens_k,
                     max_seqlen_q=self.forward_metadata_spec_decode_expand.max_seq_len_q,
-                    softmax_scale=layer.scaling,
+                    softmax_scale=1.0, # WD: q = q* scaling,
                     causal=False,
                     window_size=window_size,
                     softcap=layer.logit_cap,
