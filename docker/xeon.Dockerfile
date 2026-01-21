@@ -1,8 +1,8 @@
 FROM ubuntu:24.04
 SHELL ["/bin/bash", "-c"]
 
-ARG SGLANG_REPO=https://github.com/blzheng/sglang.git
-ARG VER_SGLANG=beilei/qwen3-omni
+ARG SGLANG_REPO=https://github.com/jianan-gu/sglang
+ARG VER_SGLANG=cpu_optimized
 
 ARG VER_TORCH=2.9.0
 ARG VER_TORCHVISION=0.24.0
