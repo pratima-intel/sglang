@@ -130,7 +130,7 @@ namespace {
 #define CHECK_GT(a, b) TORCH_CHECK((a) > (b), "CHECK_GT(" #a ", " #b ") failed. ", a, " vs ", b)
 #define CHECK_GE(a, b) TORCH_CHECK((a) >= (b), "CHECK_GE(" #a ", " #b ") failed. ", a, " vs ", b)
 
-template <bool is_only_lastdim_contiguous>
+template <bool is_only_lastdim_contiguous = false>
 static inline void CHECK_INPUT_SHAPE_DTYPE(const at::Tensor& tensor, const at::IntArrayRef sizes, at::ScalarType st) {
   TORCH_CHECK(tensor.sizes() == sizes, "Input tensor shape mismatch: expected ", sizes, ", got ", tensor.sizes());
   TORCH_CHECK(tensor.scalar_type() == st, "Input tensor dtype mismatch");
@@ -140,8 +140,12 @@ static inline void CHECK_INPUT_SHAPE_DTYPE(const at::Tensor& tensor, const at::I
     CHECK_INPUT(tensor);
   }
 }
-#define CHECK_GE(a, b) TORCH_CHECK((a) >= (b), "CHECK_GE(" #a ", " #b ") failed. ", a, " vs ", b)
-
+template <bool is_only_lastdim_contiguous = false>
+static inline void CHECK_INPUT_SHAPE_DTYPE(const std::optional<at::Tensor>& tensor, const at::IntArrayRef sizes, at::ScalarType st) {
+  if (tensor.has_value()) {
+    CHECK_INPUT_SHAPE_DTYPE<is_only_lastdim_contiguous>(tensor.value(), sizes, st);
+  }
+}
 // [NB] Parallel Routines
 //
 //  * at::parallel_for - applies for most of generic use cases, this will be compiled
@@ -172,10 +176,12 @@ inline int get_thread_num() {
 #endif
 }
 
+#define USE_ATEN_PARTITION 0
+
 // balance payload across each thread
 template <typename T>
 inline void balance211(T n, T nth, T ith, T& n_start, T& n_end) {
-#if 0
+#if not USE_ATEN_PARTITION
     // onednn partition pattern
     T& n_my = n_end;
     if (nth <= 1 || n == 0) {
@@ -257,13 +263,18 @@ inline void parallel_2d(int m, int n, const func_t& f) {
     int ith_m = ith / nth_n;
     int ith_n = ith % nth_n;
 
-    int thread_block_m = div_up(m, nth_m);
-    int thread_block_n = div_up(n, nth_n);
+    //int thread_block_m = div_up(m, nth_m);
+    //int thread_block_n = div_up(n, nth_n);
 
-    int begin_m = ith_m * thread_block_m;
-    int end_m = std::min(m, begin_m + thread_block_m);
-    int begin_n = ith_n * thread_block_n;
-    int end_n = std::min(n, begin_n + thread_block_n);
+    //int begin_m = ith_m * thread_block_m;
+    //int end_m = std::min(m, begin_m + thread_block_m);
+    //int begin_n = ith_n * thread_block_n;
+    //int end_n = std::min(n, begin_n + thread_block_n);
+
+    int begin_m, end_m;
+    balance211(m, nth_m, ith_m, begin_m, end_m);
+    int begin_n, end_n;
+    balance211(n, nth_n, ith_n, begin_n, end_n);
 
     f(begin_m, end_m, begin_n, end_n);
   }
