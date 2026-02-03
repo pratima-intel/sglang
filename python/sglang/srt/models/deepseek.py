@@ -190,13 +190,12 @@ class DeepseekMoE(nn.Module):
                 topk_weights,
                 topk_ids,
                 False,  # inplace # See [Note] inplace should be False in fused_experts.
-                False,  # use_int8_w8a8
-                False,  # use_fp8_w8a16
+                0, # CPUQuantMethod.UNQUANT,
                 None,  # w1_scale
                 None,  # w2_scale
+                None,  # w1_zp
+                None,  # w2_zp
                 None,  # block_size
-                None,  # a1_scale
-                None,  # a2_scale
                 True,  # is_vnni
             )
         else:
