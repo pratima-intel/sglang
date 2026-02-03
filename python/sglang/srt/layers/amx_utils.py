@@ -59,7 +59,7 @@ def is_dim_conv_weight(weight):
 
 
 def _amx_process_weight_after_loading(
-    module, weight_names, transpose_dims=None, is_conv3d=False
+    module, weight_names, transpose_dims=None, is_conv3d=False,  qweight_packed_method=None
 ) -> None:
     # Pack weight for get better performance on CPU
     devices = {getattr(module, weight_name).device for weight_name in weight_names}
@@ -70,32 +70,57 @@ def _amx_process_weight_after_loading(
         assert len(weight_names) == len(
             transpose_dims
         ), "len(weight_names) should be equal to len(transpose_dims)"
+    if qweight_packed_method is None:
+        for i, weight_name in enumerate(weight_names):
+            weight_tensor = getattr(module, weight_name)
 
-    for i, weight_name in enumerate(weight_names):
-        weight_tensor = getattr(module, weight_name)
+            if transpose_dims and transpose_dims[i]:
+                weight_tensor = weight_tensor.transpose(*transpose_dims[i])
+            is_conv_weight = is_dim_conv_weight(weight_tensor)
+            # We don't pack weight or use intel amx backend if any weight of this module has unsupported dim.
+            if (
+                (not dim_is_supported(weight_tensor))
+                or not dtype_is_supported(weight_tensor)
+            ) and (not is_conv_weight) and not is_conv3d:
+                logger.warning(
+                    f"Unsupported dimension or dtype for prepacking for weight '{weight_name}' with shape {weight_tensor.shape} and dtype {weight_tensor.dtype} in {module}. "
+                    f"The derived (OC, IC) dimensions must be divisible by (16, 32). "
+                )
+                module.use_intel_amx_backend = False
+                return
 
-        if transpose_dims and transpose_dims[i]:
-            weight_tensor = weight_tensor.transpose(*transpose_dims[i])
-        is_conv_weight = is_dim_conv_weight(weight_tensor)
-        # We don't pack weight or use intel amx backend if any weight of this module has unsupported dim.
-        if (
-            (not dim_is_supported(weight_tensor))
-            or not dtype_is_supported(weight_tensor)
-        ) and (not is_conv_weight) and not is_conv3d:
-            logger.warning(
-                f"Unsupported dimension or dtype for prepacking for weight '{weight_name}' with shape {weight_tensor.shape} and dtype {weight_tensor.dtype} in {module}. "
-                f"The derived (OC, IC) dimensions must be divisible by (16, 32). "
+            packed_weight = torch.nn.Parameter(
+                amx_process_weight_after_loading(weight_tensor, is_conv=is_conv_weight ,is_conv3d=is_conv3d),
+                requires_grad=False,
             )
-            module.use_intel_amx_backend = False
-            return
-
-        packed_weight = torch.nn.Parameter(
-            amx_process_weight_after_loading(weight_tensor, is_conv=is_conv_weight ,is_conv3d=is_conv3d),
+            packed_weight.__dict__ = weight_tensor.__dict__
+            setattr(module, weight_name, packed_weight)
+    else:
+        assert qweight_packed_method in ["awq"]  # TODO: add GPTQ, etc.
+        qweight_tensor = getattr(module, weight_names[0])
+        qzeros_tensor = getattr(module, weight_names[1])
+        scales_tensor = getattr(module, weight_names[2])
+        qweight, qzeros, scales = torch.ops.sgl_kernel.convert_weight_packed_scale_zp(
+            qweight_tensor, qzeros_tensor, scales_tensor
+        )
+        packed_qweight = torch.nn.Parameter(
+            qweight.detach(),
             requires_grad=False,
         )
-        packed_weight.__dict__ = weight_tensor.__dict__
-        setattr(module, weight_name, packed_weight)
-
+        packed_qzeros = torch.nn.Parameter(
+            qzeros.detach(),
+            requires_grad=False,
+        )
+        packed_scales = torch.nn.Parameter(
+            scales.detach(),
+            requires_grad=False,
+        )
+        packed_qweight.__dict__ = qweight_tensor.__dict__
+        packed_qzeros.__dict__ = qzeros_tensor.__dict__
+        packed_scales.__dict__ = scales_tensor.__dict__
+        setattr(module, weight_names[0], packed_qweight)
+        setattr(module, weight_names[1], packed_qzeros)
+        setattr(module, weight_names[2], packed_scales)
     module.use_intel_amx_backend = (
         device == torch.device("cpu") and cpu_has_amx_support()
     )
