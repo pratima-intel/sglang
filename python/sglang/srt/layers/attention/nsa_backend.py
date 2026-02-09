@@ -44,20 +44,20 @@ if TYPE_CHECKING:
 
 _is_hip = is_hip()
 
-if _is_hip:
-    try:
-        from aiter import (  # noqa: F401
-            flash_attn_varlen_func,
-            mha_batch_prefill_func,
-            paged_attention_ragged,
-        )
-        from aiter.mla import mla_decode_fwd, mla_prefill_fwd  # noqa: F401
-    except ImportError:
-        print(
-            "aiter is AMD specific kernel library. Please make sure aiter is installed on your AMD device."
-        )
-else:
-    from sgl_kernel.flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
+# if _is_hip:
+#     try:
+#         from aiter import (  # noqa: F401
+#             flash_attn_varlen_func,
+#             mha_batch_prefill_func,
+#             paged_attention_ragged,
+#         )
+#         from aiter.mla import mla_decode_fwd, mla_prefill_fwd  # noqa: F401
+#     except ImportError:
+#         print(
+#             "aiter is AMD specific kernel library. Please make sure aiter is installed on your AMD device."
+#         )
+# else:
+#     from sgl_kernel.flash_attn import flash_attn_varlen_func#, flash_attn_with_kvcache
 
 
 # Reuse this workspace buffer across all NSA backend instances
@@ -305,7 +305,7 @@ class NativeSparseAttnBackend(
 
         self._arange_buf = torch.arange(16384, device=self.device, dtype=torch.int32)
 
-        if _is_hip:
+        if True or _is_hip:
             max_bs = model_runner.req_to_token_pool.size
 
             self.kv_indptr = torch.zeros(
@@ -320,11 +320,11 @@ class NativeSparseAttnBackend(
         )
         self.speculative_step_id = speculative_step_id
 
-        self.device_capability = torch.cuda.get_device_capability()
-        self.device_sm_major = self.device_capability[0]
+        # self.device_capability = torch.cuda.get_device_capability()
+        # self.device_sm_major = self.device_capability[0]
 
         # Allocate global workspace buffer for TRT-LLM kernels (ragged attention on SM100/B200, or trtllm decode)
-        if self.device_sm_major >= 10 or self.nsa_decode_impl == "trtllm":
+        if False :#and self.device_sm_major >= 10 or self.nsa_decode_impl == "trtllm":
             global global_workspace_buffer
             if global_workspace_buffer is None:
                 global_workspace_buffer = torch.empty(
@@ -1280,12 +1280,19 @@ class NativeSparseAttnBackend(
         if nsa_impl == "tilelang":
             if q_rope is not None:
                 q_all = _concat_mla_absorb_q_general(q_nope, q_rope)
-            return self._forward_tilelang(
+            # breakpoint()
+            return self._forward_amx(
                 q_all=q_all,
                 kv_cache=kv_cache,
                 page_table_1=page_table_1,
-                sm_scale=layer.scaling,
-                v_head_dim=layer.v_head_dim,
+                layer=layer,
+                metadata=metadata,
+                bs=forward_batch.batch_size,
+                out_cache_loc=forward_batch.encoder_out_cache_loc,
+                req_to_token=forward_batch.req_to_token_pool.req_to_token,
+                req_pool_indices=forward_batch.req_pool_indices,
+                seq_lens=forward_batch.seq_lens,
+
             )
         elif nsa_impl == "flashmla_sparse":
             if q_rope is not None:
@@ -1440,12 +1447,25 @@ class NativeSparseAttnBackend(
         elif self.nsa_decode_impl == "tilelang":
             if q_rope is not None:
                 q_all = _concat_mla_absorb_q_general(q_nope, q_rope)
-            return self._forward_tilelang(
+            # return self._forward_tilelang(
+            #     q_all=q_all,
+            #     kv_cache=kv_cache,
+            #     page_table_1=page_table_1,
+            #     sm_scale=layer.scaling,
+            #     v_head_dim=layer.v_head_dim,
+            # )
+            return self._forward_amx(
                 q_all=q_all,
                 kv_cache=kv_cache,
                 page_table_1=page_table_1,
-                sm_scale=layer.scaling,
-                v_head_dim=layer.v_head_dim,
+                layer=layer,
+                metadata=metadata,
+                bs=forward_batch.batch_size,
+                out_cache_loc=forward_batch.encoder_out_cache_loc,
+                req_to_token=forward_batch.req_to_token_pool.req_to_token,
+                req_pool_indices=forward_batch.req_pool_indices,
+                seq_lens=forward_batch.seq_lens,
+
             )
         elif self.nsa_decode_impl == "fa3":
             return self._forward_fa3(
@@ -1465,7 +1485,7 @@ class NativeSparseAttnBackend(
         elif self.nsa_decode_impl == "aiter":
             if q_rope is not None:
                 q_all = torch.cat([q_nope, q_rope], dim=-1)
-            return self._forward_aiter(
+            return self._forward_amx(
                 q_all=q_all,
                 kv_cache=kv_cache,
                 page_table_1=page_table_1,
@@ -1526,6 +1546,79 @@ class NativeSparseAttnBackend(
             num_splits=self.num_splits,
         )
         return o  # type: ignore
+
+    def _forward_amx(
+        self,
+        q_all: torch.Tensor,
+        kv_cache: torch.Tensor,
+        page_table_1: torch.Tensor,
+        layer: RadixAttention,
+        metadata: NSAMetadata,
+        bs: int,
+        out_cache_loc,
+        req_to_token,
+        req_pool_indices,
+        seq_lens,
+    ) -> torch.Tensor:
+        q = q_all.reshape(-1, layer.tp_q_head_num * layer.head_dim)
+
+        if layer.head_dim != layer.v_head_dim:
+            o = q.new_empty((q.shape[0], layer.tp_q_head_num * layer.v_head_dim))
+        else:
+            o = torch.empty_like(q)
+
+        kv_indptr = self.kv_indptr
+
+        # non_minus1_mask = page_table_1 != -1
+        # non_minus1_counts = non_minus1_mask.sum(dim=1)
+        # kv_indptr[1 : bs + 1] = torch.cumsum(non_minus1_counts, dim=0)
+
+        kv_indices = page_table_1[page_table_1 != -1]
+        # breakpoint()
+        k_cache = kv_cache[:, :, layer.v_head_dim:]
+        v_cache = kv_cache[:, :, :layer.v_head_dim]
+        # mla_decode_fwd(
+        #     q.view(-1, layer.tp_q_head_num, layer.head_dim),
+        #     kv_cache.view(-1, 1, 1, layer.head_dim),
+        #     v_cache.view(-1, 1, 1, layer.head_dim),
+        #     o.view(-1, layer.tp_q_head_num, layer.v_head_dim),
+        #     k,
+        #     v,
+        #     metadata.cu_seqlens_q,
+        #     kv_indptr,
+        #     kv_indices,
+        #     metadata.cu_seqlens_q,
+        #     metadata.max_seq_len_q,
+        #     layer.scaling,
+        #     layer.logit_cap,
+        # )
+        attn_logits = torch.zeros(
+            (
+                bs,
+                layer.tp_q_head_num,
+                8,  # self.num_kv_splits,
+                layer.v_head_dim + 1,
+            ),
+            dtype=torch.float32,
+            device=self.device,
+        )
+        torch.ops.sgl_kernel.decode_attention_cpu( 
+            q.view(-1, layer.tp_q_head_num, layer.qk_head_dim),
+            k_cache,
+            v_cache,
+            o.view(-1, layer.tp_q_head_num, layer.v_head_dim),
+            torch.zeros(1, 1, layer.qk_head_dim),
+            torch.zeros(1, 1, layer.v_head_dim),
+            out_cache_loc,
+            attn_logits,
+            req_to_token,
+            req_pool_indices,
+            seq_lens,
+            layer.scaling,
+            layer.logit_cap,
+        )
+        # breakpoint()
+        return o
 
     def _forward_flashmla_sparse(
         self,

@@ -1571,7 +1571,7 @@ void decode_attention_cpu(
   CHECK_DIM(3, v_buffer);
   CHECK_DIM(3, key);
   CHECK_DIM(3, value);
-  CHECK_DIM(1, loc);
+  // CHECK_DIM(1, loc);
 
   int64_t num_seqs = seq_lens.size(0);
   int64_t max_num_reqs = req_to_token.size(0);
@@ -1585,7 +1585,7 @@ void decode_attention_cpu(
 
   int64_t num_kv_splits = attn_logits.size(2);
 
-  CHECK_EQ(loc.numel(), num_seqs);
+  // CHECK_EQ(loc.numel(), num_seqs);
   CHECK_EQ(attn_logits.size(0), num_seqs);
   CHECK_EQ(attn_logits.size(1), num_heads);
   CHECK_EQ(attn_logits.size(3), head_size_v + 1);
@@ -1634,25 +1634,25 @@ void decode_attention_cpu(
   AT_DISPATCH_REDUCED_FLOATING_TYPES(query.scalar_type(), "decode_attention_kernel", [&] {
     AT_DISPATCH_INDEX_TYPES(index_dtype, "decode_attention_indices", [&] {
       // update the kv buffer
-      decode_set_kv_buffer(
-          (scalar_t*)k_buffer_data,
-          (scalar_t*)v_buffer_data,
-          key.data_ptr<scalar_t>(),
-          value.data_ptr<scalar_t>(),
-          loc.data_ptr<int64_t>(),
-          num_seqs,
-          num_heads_kv,
-          head_size,
-          head_size_v,
-          k_strideN,
-          k_strideH,
-          v_strideN,
-          v_strideH,
-          nk_strideN,
-          nk_strideH,
-          nv_strideN,
-          nv_strideH,
-          is_mla);
+      // decode_set_kv_buffer(
+      //     (scalar_t*)k_buffer_data,
+      //     (scalar_t*)v_buffer_data,
+      //     key.data_ptr<scalar_t>(),
+      //     value.data_ptr<scalar_t>(),
+      //     loc.data_ptr<int64_t>(),
+      //     num_seqs,
+      //     num_heads_kv,
+      //     head_size,
+      //     head_size_v,
+      //     k_strideN,
+      //     k_strideH,
+      //     v_strideN,
+      //     v_strideH,
+      //     nk_strideN,
+      //     nk_strideH,
+      //     nv_strideN,
+      //     nv_strideH,
+      //     is_mla);
 
       if (num_heads == num_heads_kv) {
         // MHA

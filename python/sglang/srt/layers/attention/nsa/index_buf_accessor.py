@@ -22,7 +22,7 @@ s: scale, 1 item per token, fp32
 class GetK:
     @classmethod
     def execute(cls, *args, **kwargs):
-        return cls.triton(*args, **kwargs)
+        return cls.slow(*args, **kwargs)
 
     @classmethod
     def slow(
@@ -66,7 +66,7 @@ class GetK:
 
         # flat_indices: (num_pages, num_k_bytes_per_page), int32, element := an index into flat_buf that we want to access
         flat_indices = (page_indices * buf_numel_per_page)[:, None] + torch.arange(
-            num_k_bytes_per_page, dtype=torch.int32, device="cuda"
+            num_k_bytes_per_page, dtype=torch.int32, device="cpu"
         )[None, :]
         flat_indices = flat_indices.flatten()[: seq_len * num_k_bytes_per_token]
 
@@ -94,7 +94,7 @@ class GetK:
 class GetS:
     @classmethod
     def execute(cls, *args, **kwargs):
-        return cls.triton(*args, **kwargs)
+        return cls.slow(*args, **kwargs)
 
     @classmethod
     def slow(
@@ -132,7 +132,7 @@ class GetS:
         flat_buf = buf.flatten()
         flat_indices = (
             (page_indices * buf_numel_per_page)[:, None]
-            + torch.arange(num_s_bytes_per_page, dtype=torch.int32, device="cuda")[
+            + torch.arange(num_s_bytes_per_page, dtype=torch.int32, device="cpu")[
                 None, :
             ]
             + s_offset_in_page
@@ -226,7 +226,7 @@ class SetK:
         flat_indices = (
             (loc_page_index * buf_numel_per_page)[:, None]
             + (loc_token_offset_in_page * num_k_bytes_per_token)[:, None]
-            + torch.arange(num_k_bytes_per_token, dtype=torch.int32, device="cuda")[
+            + torch.arange(num_k_bytes_per_token, dtype=torch.int32, device="cpu")[
                 None, :
             ]
         )
@@ -278,7 +278,7 @@ class SetS:
             (loc_page_index * buf_numel_per_page)[:, None]
             + s_offset_in_page
             + (loc_token_offset_in_page * num_s_bytes_per_token)[:, None]
-            + torch.arange(num_s_bytes_per_token, dtype=torch.int32, device="cuda")[
+            + torch.arange(num_s_bytes_per_token, dtype=torch.int32, device="cpu")[
                 None, :
             ]
         )
@@ -307,7 +307,7 @@ class SetKAndS:
             ), f"{buf=} {buf_cloned=} {kwargs['loc'].to_list()=}"
             return
 
-        cls.triton(*args, **kwargs, buf=buf)
+        cls.vanilla(*args, **kwargs, buf=buf)
 
     @classmethod
     def vanilla(cls, pool, buf, loc, index_k, index_k_scale):
@@ -353,14 +353,14 @@ def _set_k_and_s_triton(
         raise ValueError(
             f"index_k_scale must be 1D or 2D, got shape {index_k_scale.shape}"
         )
-    if _is_hip:
+    if True or _is_hip:
         assert buf_numel_per_page == 1 * (128 + 4)
     else:
         assert buf_numel_per_page == 64 * (128 + 4)
     assert num_tokens_to_write == num_tokens_to_write_ == num_tokens_to_write__
     assert index_head_dim == 128
     assert scale_dim == 1
-    if _is_hip:
+    if True or _is_hip:
         assert page_size == 1
     else:
         assert page_size == 64
@@ -595,8 +595,73 @@ def _get_s_triton_kernel(
     dst_offset = token_id * 4
     tl.store(out_ptr + dst_offset + offsets, data)
 
-
 def _get_k_and_s_triton(
+    buf: torch.Tensor,
+    page_indices: torch.Tensor,
+    seq_len: int,
+    page_size: int,
+    index_head_dim: int,
+):
+    """
+    PyTorch native implementation of fused K/S gather from paged buffer.
+    Vectorized version without explicit loops.
+
+    :param buf: (num_pages, page_size * index_head_dim + page_size * 4), uint8
+    :param page_indices: (num_pages,), int32/int64
+    :param seq_len: int, number of tokens to gather
+    :param page_size: int, typically 64
+    :param index_head_dim: int, typically 128
+    :return: tuple of (k_out, s_out) where
+             k_out: (seq_len, index_head_dim), uint8
+             s_out: (seq_len, 4), uint8
+    """
+    device = buf.device
+    num_pages, buf_numel_per_page = buf.shape
+    s_offset_in_page = page_size * index_head_dim  # Scales start after K data
+
+    # Step 1: Create token IDs [0, 1, ..., seq_len-1]
+    token_ids = torch.arange(seq_len, dtype=torch.int64, device=device)
+
+    # Step 2: Compute page index and offset within page for each token
+    page_idx = token_ids // page_size          # (seq_len,)
+    token_offset_in_page = token_ids % page_size  # (seq_len,)
+
+    # Step 3: Map logical page index to physical page index in buffer
+    physical_page_indices = page_indices[page_idx]  # (seq_len,)
+
+    # Step 4: Compute base offsets in flattened buffer for K and S
+    # Flatten buffer to 1D for easy indexing
+    buf_flat = buf.view(-1)  # (num_pages * buf_numel_per_page,)
+
+    # K base offset: page_start + token_offset * index_head_dim
+    k_base_offsets = (
+        physical_page_indices * buf_numel_per_page +
+        token_offset_in_page * index_head_dim
+    )  # (seq_len,)
+
+    # S base offset: page_start + s_offset_in_page + token_offset * 4
+    s_base_offsets = (
+        physical_page_indices * buf_numel_per_page +
+        s_offset_in_page +
+        token_offset_in_page * 4
+    )  # (seq_len,)
+
+    # Step 5: Generate full index tensors for K and S
+    # K indices: (seq_len, index_head_dim)
+    k_offsets = torch.arange(index_head_dim, dtype=torch.int64, device=device)
+    k_indices = k_base_offsets.unsqueeze(1) + k_offsets.unsqueeze(0)  # (seq_len, index_head_dim)
+
+    # S indices: (seq_len, 4)
+    s_offsets = torch.arange(4, dtype=torch.int64, device=device)
+    s_indices = s_base_offsets.unsqueeze(1) + s_offsets.unsqueeze(0)  # (seq_len, 4)
+
+    # Step 6: Gather data using advanced indexing
+    k_out = buf_flat[k_indices]  # (seq_len, index_head_dim)
+    s_out = buf_flat[s_indices]  # (seq_len, 4)
+
+    return k_out, s_out
+
+def _get_k_and_s_triton_(
     buf: torch.Tensor,
     page_indices: torch.Tensor,
     seq_len: int,

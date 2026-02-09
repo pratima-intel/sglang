@@ -79,6 +79,37 @@ _is_cpu = is_cpu()
 _cpu_has_amx_support = cpu_has_amx_support()
 _is_hip = is_hip()
 
+def set_mla_kv_buffer_pytorch(
+    kv_buffer: torch.Tensor,
+    loc: torch.Tensor,
+    cache_k_nope: torch.Tensor,
+    cache_k_rope: torch.Tensor,
+) -> None:
+    """
+    PyTorch equivalent of set_mla_kv_buffer_triton.
+
+    Args:
+        kv_buffer (torch.Tensor): Output buffer of shape [L, D], where D = nope_dim + rope_dim.
+        loc (torch.Tensor): 1D tensor of indices, shape [N], values in [0, L).
+        cache_k_nope (torch.Tensor): Shape [N, nope_dim]
+        cache_k_rope (torch.Tensor): Shape [N, rope_dim]
+
+    Effect:
+        For each i in range(N):
+            kv_buffer[loc[i]] = torch.cat([cache_k_nope[i], cache_k_rope[i]], dim=-1)
+    """
+    # Validate shapes
+    assert loc.ndim == 1, "loc must be 1D"
+    N = loc.size(0)
+    assert cache_k_nope.shape[0] == N, f"cache_k_nope batch size {cache_k_nope.shape[0]} != loc size {N}"
+    assert cache_k_rope.shape[0] == N, f"cache_k_rope batch size {cache_k_rope.shape[0]} != loc size {N}"
+
+    # Concatenate along last dimension
+    concatenated = torch.cat([cache_k_nope, cache_k_rope], dim=-1)  # [N, nope_dim + rope_dim]
+
+    # Scatter into kv_buffer at positions specified by loc
+    # kv_buffer[loc] = concatenated
+    kv_buffer[loc] = concatenated
 
 def get_tensor_size_bytes(t: Union[torch.Tensor, List[torch.Tensor]]):
     if isinstance(t, list):
@@ -1522,7 +1553,7 @@ class MLATokenToKVPool(KVCache):
             # Reuse existing two-tensor write kernel (works with FP8 byte layout)
             # cache_k_nope_fp8: (num_tokens, 1, 528) uint8 [nope_fp8(512) | scales(16)]
             # cache_k_rope_fp8: (num_tokens, 1, 128) uint8 [rope_bf16_bytes(128)]
-            set_mla_kv_buffer_triton(
+            set_mla_kv_buffer_pytorch(
                 self.kv_buffer[layer_id - self.start_layer],
                 loc,
                 cache_k_nope_fp8,
@@ -1536,7 +1567,7 @@ class MLATokenToKVPool(KVCache):
                 cache_k_nope = cache_k_nope.view(self.store_dtype)
                 cache_k_rope = cache_k_rope.view(self.store_dtype)
 
-            set_mla_kv_buffer_triton(
+            set_mla_kv_buffer_pytorch(
                 self.kv_buffer[layer_id - self.start_layer],
                 loc,
                 cache_k_nope,
@@ -1709,7 +1740,7 @@ class MLATokenToKVPoolFP4(MLATokenToKVPool):
                 cache_k_nope = cache_k_nope.view(self.store_dtype)
                 cache_k_rope = cache_k_rope.view(self.store_dtype)
 
-            set_mla_kv_buffer_triton(
+            set_mla_kv_buffer_pytorch(
                 self.kv_buffer[layer_id - self.start_layer],
                 loc,
                 cache_k_nope_fp4,
@@ -1775,7 +1806,7 @@ class NSATokenToKVPool(MLATokenToKVPool):
         # num head == 1 and head dim == 128 for index_k in NSA
         assert index_head_dim == 128
 
-        if _is_hip:
+        if _is_hip or _is_cpu:
             assert self.page_size == 1
         else:
             assert self.page_size == 64

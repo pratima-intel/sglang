@@ -34,6 +34,7 @@ from sglang.srt.layers.attention.nsa.utils import (
     is_nsa_enable_prefill_cp,
     is_nsa_prefill_cp_in_seq_split,
 )
+import torch.nn.functional as F
 from sglang.srt.layers.dp_attention import get_attention_tp_rank, get_attention_tp_size
 from sglang.srt.layers.linear import ReplicatedLinear
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
@@ -48,6 +49,133 @@ if TYPE_CHECKING:
 
 DUAL_STREAM_TOKEN_THRESHOLD = 1024 if _is_cuda else 0
 
+import math
+def act_quant_py(
+    x: torch.Tensor,
+    block_size: int = 128,
+    scale_fmt: Optional[str] = None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Quantizes the input tensor `x` using block-wise FP8 quantization.
+
+    Args:
+        x (torch.Tensor): Input tensor, must be contiguous and last dim divisible by block_size.
+        block_size (int): Block size for quantization (default: 128).
+        scale_fmt (Optional[str]): If not None, enables rounding of scale (simulated).
+
+    Returns:
+        Tuple[torch.Tensor, torch.Tensor]:
+            - Quantized tensor in torch.float8_e4m3fn.
+            - Scale tensor in torch.float32, shape [..., N // block_size].
+    """
+    assert x.is_contiguous(), "Input tensor must be contiguous"
+    assert x.size(-1) % block_size == 0, f"Last dim {x.size(-1)} not divisible by block_size={block_size}"
+
+    # Constants for FP8 E4M3
+    FP8_MAX = 448.0
+    FP8_MIN = -448.0
+    EPS = 1e-4  # to avoid division by zero
+
+    # Reshape to [..., num_blocks, block_size]
+    original_shape = x.shape
+    M = x.numel() // x.size(-1)
+    N = x.size(-1)
+    x_reshaped = x.view(M, N)
+    num_blocks = N // block_size
+    x_blocks = x_reshaped.view(M, num_blocks, block_size)  # [M, num_blocks, block_size]
+
+    # Compute absolute max per block (along last dim)
+    amax = torch.amax(torch.abs(x_blocks), dim=-1)  # [M, num_blocks]
+    amax = torch.clamp(amax, min=EPS)
+
+    # Compute scale: s = amax / FP8_MAX  --> so that x / s fits in [-FP8_MAX, FP8_MAX]
+    scale = amax / FP8_MAX  # [M, num_blocks]
+
+    if scale_fmt is not None:
+        # Simulate "fast_round_scale": round scale to nearest representable?
+        # Since we don't have the exact function, we round to nearest multiple of a small epsilon.
+        # Alternatively, you can quantize scale itself, but here we just round to 6 decimals as approximation.
+        scale = torch.round(scale * 1e6) / 1e6
+
+    # Avoid in-place modification; expand scale to match x_blocks
+    scale_expanded = scale.unsqueeze(-1)  # [M, num_blocks, 1]
+
+    # Quantize: x_quant = clamp(x / scale, FP8_MIN, FP8_MAX)
+    x_dequantized = x_blocks / scale_expanded  # [M, num_blocks, block_size]
+    x_clamped = torch.clamp(x_dequantized, min=FP8_MIN, max=FP8_MAX)
+
+    # Convert to FP8
+    # Note: PyTorch requires conversion from float32 to float8
+    y_fp8 = x_clamped.to(torch.float8_e4m3fn)
+
+    # Reshape back
+    y = y_fp8.view(original_shape)
+    s = scale.view(*original_shape[:-1], num_blocks).to(torch.float32)
+
+    return y, s
+
+def fp8_index_py(
+    q: torch.Tensor,
+    q_s: torch.Tensor,
+    k: torch.Tensor,
+    k_s: torch.Tensor,
+) -> torch.Tensor:
+    """
+    Perform index score computation using FP8-like quantized inputs.
+
+    Args:
+        q (torch.Tensor): FP8 query tensor of shape [B, M, H, D]
+        q_s (torch.Tensor): Query scales of shape [B, M, H] (float32)
+        k (torch.Tensor): FP8 key tensor of shape [B, N, D]
+        k_s (torch.Tensor): Key scales of shape [B, N] (float32)
+
+    Returns:
+        o (torch.Tensor): Index scores of shape [B, M, N] (float32)
+    """
+    # Validate shapes and dtypes
+    assert q.dtype == torch.float8_e4m3fn, "q must be in torch.float8_e4m3fn"
+    assert k.dtype == torch.float8_e4m3fn, "k must be in torch.float8_e4m3fn"
+    assert q.is_contiguous() and k.is_contiguous()
+    assert q_s.is_contiguous() and k_s.is_contiguous()
+
+    B, M, H, D = q.shape
+    B_k, N, D_k = k.shape
+    assert (B_k, D_k) == (B, D), f"Shape mismatch: q has D={D}, k has D={D_k}"
+    assert q_s.shape == (B, M, H), f"q_s shape {q_s.shape} != (B, M, H) = ({B}, {M}, {H})"
+    assert k_s.shape == (B, N), f"k_s shape {k_s.shape} != (B, N) = ({B}, {N})"
+
+    # Step 1: Dequantize q and k to float32 for computation
+    # Since FP8 tensors cannot be directly used in matmul in most PyTorch versions,
+    # we convert to float32 first.
+    q_f32 = q.to(torch.float32)  # [B, M, H, D]
+    k_f32 = k.to(torch.float32)  # [B, N, D]
+
+    # Step 2: Compute logits = k @ q^T  --> [B, N, H] for each (m)
+    # We need: for each (b, m), compute k[b] @ q[b, m].T  --> [N, H]
+    # So: q reshaped to [B, M, D, H] for batch matmul with k [B, N, D]
+    q_T = q_f32.transpose(-1, -2)  # [B, M, D, H]
+    # Use einsum or bmm: (B, N, D) x (B, M, D, H) -> we need per m
+    # Better: expand k to [B, M, N, D] and q to [B, M, D, H], then matmul
+    k_exp = k_f32.unsqueeze(1).expand(-1, M, -1, -1)        # [B, M, N, D]
+    q_exp = q_f32                                           # [B, M, H, D]
+    # Compute: [B, M, N, D] @ [B, M, D, H] -> [B, M, N, H]
+    logits = torch.matmul(k_exp, q_exp.transpose(-1, -2))   # [B, M, N, H]
+
+    # Step 3: ReLU (max(x, 0))
+    logits = torch.relu(logits)  # [B, M, N, H]
+
+    # Step 4: Multiply by q_s per head: [B, M, N, H] * [B, M, H] -> broadcast
+    q_s_exp = q_s.unsqueeze(2)  # [B, M, 1, H]
+    logits = logits * q_s_exp   # [B, M, N, H]
+
+    # Step 5: Sum over heads (H)
+    logits_sum = logits.sum(dim=-1)  # [B, M, N]
+
+    # Step 6: Multiply by k_s: [B, M, N] * [B, N] -> broadcast
+    k_s_exp = k_s.unsqueeze(1)  # [B, 1, N]
+    o = logits_sum * k_s_exp    # [B, M, N]
+
+    return o
 
 class BaseIndexerMetadata(ABC):
     @abstractmethod
@@ -122,7 +250,10 @@ def rotate_activation(x: torch.Tensor) -> torch.Tensor:
     assert (
         hidden_size & (hidden_size - 1)
     ) == 0, "Hidden size must be a power of 2 for Hadamard transform."
-    return hadamard_transform(x, scale=hidden_size**-0.5)
+    import scipy
+    scale=hidden_size**-0.5
+    return F.linear(x, torch.tensor(scipy.linalg.hadamard(hidden_size)).to(torch.bfloat16)) * scale
+    # return hadamard_transform(x, scale=hidden_size**-0.5)
 
 
 class Indexer(MultiPlatformOp):
@@ -219,19 +350,21 @@ class Indexer(MultiPlatformOp):
         else:
             yield
 
-    @torch.compile(dynamic=True) if not _is_hip else lambda f: f
+    # @torch.compile(dynamic=True) if not _is_hip else lambda f: f
     def _project_and_scale_head_gates(self, x: torch.Tensor):
         if _is_hip:
             x = x.to(self.weights_proj.weight.dtype)
+        x = x.to(self.weights_proj.weight.dtype)
         weights, _ = self.weights_proj(x)
         weights = weights.float()
         weights = weights * self.n_heads**-0.5
         return weights
 
-    @torch.compile(dynamic=True) if not _is_hip else lambda f: f
+    # @torch.compile(dynamic=True) if not _is_hip else lambda f: f
     def _get_logits_head_gate(self, x: torch.Tensor, q_scale: torch.Tensor):
         if _is_hip:
             x = x.to(self.weights_proj.weight.dtype)
+        x = x.to(self.weights_proj.weight.dtype)
         weights, _ = self.weights_proj(x)
         weights = weights.float()
         weights = weights * self.n_heads**-0.5
@@ -284,7 +417,9 @@ class Indexer(MultiPlatformOp):
                 key, [self.rope_head_dim, self.head_dim - self.rope_head_dim], dim=-1
             )
 
-        q_rope, k_rope = self.rotary_emb(positions, q_rope, k_rope)
+        # q_rope, k_rope = self.rotary_emb(positions, q_rope, k_rope)
+        q_rope, k_rope = self.rotary_emb(positions, q_rope, k_rope.unsqueeze(1))
+        k_rope = k_rope.view([k_rope.size(0), -1])
 
         query[..., : self.rope_head_dim] = q_rope
         key[..., : self.rope_head_dim] = k_rope
@@ -463,7 +598,7 @@ class Indexer(MultiPlatformOp):
         assert forward_batch.forward_mode.is_extend_without_speculative()
 
         page_size = forward_batch.token_to_kv_pool.page_size
-        if _is_hip:
+        if True or _is_hip:
             assert page_size == 1, "only support page size 1"
         else:
             assert page_size == 64, "only support page size 64"
@@ -473,7 +608,7 @@ class Indexer(MultiPlatformOp):
         k_fp8_list = []
         k_scale_list = []
 
-        if _is_hip:
+        if True or _is_hip:
             block_tables = metadata.get_page_table_1()
         else:
             block_tables = metadata.get_page_table_64()
@@ -719,7 +854,7 @@ class Indexer(MultiPlatformOp):
 
                 extend_seq_len = end_seq_position - start_seq_position
                 ks = torch.full(
-                    (extend_seq_len,), offset, dtype=torch.int32, device="cuda"
+                    (extend_seq_len,), offset, dtype=torch.int32, device="cpu"
                 )
                 k_fp8_list.append(k_fp8)
                 k_scale_list.append(k_scale)
@@ -728,11 +863,11 @@ class Indexer(MultiPlatformOp):
                     start_seq_position + 1,
                     end_seq_position + 1,
                     dtype=torch.int32,
-                    device="cuda",
+                    device="cpu",
                 )
                 ke_offset_list.append(ke_offset)
                 actual_seq_q = torch.tensor(
-                    [extend_seq_len], dtype=torch.int32, device="cuda"
+                    [extend_seq_len], dtype=torch.int32, device="cpu"
                 )
                 actual_seq_q_list.append(actual_seq_q)
                 batch_idx_list.append(batch_idx)
@@ -781,12 +916,12 @@ class Indexer(MultiPlatformOp):
             k_fp8 = k_fp8.view(torch.float8_e4m3fn)
             k_scale = k_scale.view(torch.float32).squeeze(-1)
             kv_fp8 = (k_fp8, k_scale)
-            ks = torch.full((actual_seq_q,), offset, dtype=torch.int32, device="cuda")
+            ks = torch.full((actual_seq_q,), offset, dtype=torch.int32, device="cpu")
             ke_offset = torch.arange(
                 (kv_len - actual_seq_q) + 1,
                 kv_len + 1,
                 dtype=torch.int32,
-                device="cuda",
+                device="cpu",
             )
             ke = ks + ke_offset
 
@@ -800,7 +935,7 @@ class Indexer(MultiPlatformOp):
                     clean_logits=False,
                 )
             actual_seq_q = torch.tensor([actual_seq_q], dtype=torch.int32).to(
-                device="cuda", non_blocking=True
+                device="cpu", non_blocking=True
             )
             topk_result = metadata.topk_transform(
                 logits,
@@ -820,11 +955,11 @@ class Indexer(MultiPlatformOp):
         topk: int,
         layer_id: int,
     ) -> Optional[torch.Tensor]:
-        if not _is_npu:
-            from sglang.srt.layers.attention.nsa.tilelang_kernel import fp8_index
+        # if not _is_npu:
+        #     from sglang.srt.layers.attention.nsa.tilelang_kernel import fp8_index
 
         page_size = forward_batch.token_to_kv_pool.page_size
-        assert page_size == 64, "only support page size 64"
+        # assert page_size == 64, "only support page size 64"
 
         assert len(weights.shape) == 3
         weights = weights.squeeze(-1)
@@ -839,7 +974,7 @@ class Indexer(MultiPlatformOp):
             forward_batch.req_pool_indices, :
         ]
         strided_indices = torch.arange(
-            0, block_tables.shape[-1], page_size, device="cuda"
+            0, block_tables.shape[-1], page_size, device="cpu"
         )
         block_tables = block_tables[:, strided_indices] // page_size
 
@@ -874,7 +1009,7 @@ class Indexer(MultiPlatformOp):
             k_fp8 = k_fp8.view(torch.float8_e4m3fn).unsqueeze(0).contiguous()
             k_scale = k_scale.view(torch.float32).squeeze(-1).unsqueeze(0).contiguous()
 
-            index_score = fp8_index(
+            index_score = fp8_index_py(
                 q_fp8_partial,
                 weights_partial,
                 k_fp8,
@@ -1043,6 +1178,214 @@ class Indexer(MultiPlatformOp):
                     device=x_meta.device,
                 )
 
+            if (
+                forward_batch.forward_mode.is_decode_or_idle()
+                or forward_batch.forward_mode.is_target_verify()
+                or forward_batch.forward_mode.is_draft_extend(include_v2=True)
+            ):
+                topk_result = self._get_topk_paged(
+                    forward_batch, layer_id, q_fp8, weights, metadata
+                )
+            else:
+                if (
+                    forward_batch.nsa_cp_metadata is not None
+                    and is_nsa_prefill_cp_in_seq_split()
+                ):
+                    kv_len_prev = forward_batch.nsa_cp_metadata.kv_len_prev
+                    kv_len_next = forward_batch.nsa_cp_metadata.kv_len_next
+                    actual_seq_q_prev = forward_batch.nsa_cp_metadata.actual_seq_q_prev
+                    actual_seq_q_next = forward_batch.nsa_cp_metadata.actual_seq_q_next
+
+                    # TODO support mutil-batch
+                    # cp_batch_seq_index_prev = forward_batch.nsa_cp_metadata["cp_batch_seq_index_prev"]
+                    # cp_batch_seq_index_next = forward_batch.nsa_cp_metadata["cp_batch_seq_index_next"]
+                    # TODO prev, next, combined into a single call
+                    q_fp8_prev, q_fp8_next = torch.split(
+                        q_fp8, (q_fp8.shape[0] + 1) // 2, dim=0
+                    )
+                    weights_prev, weights_next = torch.split(
+                        weights, (weights.shape[0] + 1) // 2, dim=0
+                    )
+                    topk_result_prev = self._get_topk_ragged_with_cp(
+                        forward_batch,
+                        layer_id,
+                        q_fp8_prev,
+                        weights_prev,
+                        metadata,
+                        kv_len_prev,
+                        actual_seq_q_prev,
+                    )
+
+                    topk_result_next = self._get_topk_ragged_with_cp(
+                        forward_batch,
+                        layer_id,
+                        q_fp8_next,
+                        weights_next,
+                        metadata,
+                        kv_len_next,
+                        actual_seq_q_next,
+                    )
+                    return torch.cat([topk_result_prev, topk_result_next], dim=0)
+                else:
+                    topk_result = self._get_topk_ragged(
+                        forward_batch, layer_id, q_fp8, weights, metadata
+                    )
+        else:
+            topk_result = self.forward_indexer(
+                q_fp8.contiguous(),
+                weights,
+                forward_batch,
+                topk=self.index_topk,
+                layer_id=layer_id,
+            )
+        return topk_result
+    def forward_cpu(
+        self,
+        x: torch.Tensor,
+        q_lora: torch.Tensor,
+        positions: torch.Tensor,
+        forward_batch: ForwardBatch,
+        layer_id: int,
+        return_indices: bool = True,
+    ) -> Optional[torch.Tensor]:
+        if _is_hip:
+            from sglang.srt.layers.attention.nsa.tilelang_kernel import act_quant
+        elif not _is_npu:
+            from sglang.srt.layers.attention.nsa.triton_kernel import act_quant
+
+        if TYPE_CHECKING:
+            assert isinstance(forward_batch.token_to_kv_pool, NSATokenToKVPool)
+
+        # When upstream uses fused FP8 RMSNorm+quant, activations may be passed as
+        # a tuple like (x_fp8, x_scale[, y]). Use `x_meta` for shape/device queries.
+        x_meta = x[0] if isinstance(x, tuple) else x
+
+        metadata = forward_batch.attn_backend.get_indexer_metadata(
+            layer_id, forward_batch
+        )
+
+        enable_dual_stream = (
+            self.alt_stream is not None
+            and get_is_capture_mode()
+            and q_lora.shape[0] > 0
+            and q_lora.shape[0] <= DUAL_STREAM_TOKEN_THRESHOLD
+        )
+
+        # skip NSA if attention backend choose to skip this batch
+        if metadata is None:
+            return None
+
+        # Determine if should skip topk based on sequence length
+        # We can only skip the logits computation if cuda graph is not involved
+        skip_logits_computation = False
+        if forward_batch.forward_mode.is_extend_without_speculative():
+            if forward_batch.seq_lens_cpu is not None:
+                max_kv_len = forward_batch.seq_lens_cpu.max().item()
+                skip_logits_computation = max_kv_len <= self.index_topk
+
+        # Optimization: fast path when skipping topk computation
+        if False and skip_logits_computation and (not self.nsa_enable_prefill_cp):
+            return self._forward_cuda_k_only(
+                x,
+                positions,
+                forward_batch,
+                layer_id,
+                act_quant_py,
+                enable_dual_stream,
+                metadata,
+                return_indices,
+            )
+
+        if enable_dual_stream and forward_batch.forward_mode.is_decode_or_idle():
+            current_stream = torch.cuda.current_stream()
+            self.alt_stream.wait_stream(current_stream)
+            weights = self._project_and_scale_head_gates(x)
+            query, key = self._get_q_k_bf16(
+                q_lora, x, positions, enable_dual_stream, forward_batch=forward_batch
+            )
+            q_fp8, q_scale = act_quant(query, self.block_size, self.scale_fmt)
+            with torch.cuda.stream(self.alt_stream):
+                k_fp8, k_scale = act_quant(key, self.block_size, self.scale_fmt)
+            current_stream.wait_stream(self.alt_stream)
+            weights = weights.unsqueeze(-1) * q_scale * self.softmax_scale
+        else:
+            query, key = self._get_q_k_bf16(
+                q_lora, x, positions, enable_dual_stream, forward_batch=forward_batch
+            )
+
+            if enable_dual_stream:
+                current_stream = torch.cuda.current_stream()
+                self.alt_stream.wait_stream(current_stream)
+
+                q_fp8, q_scale = act_quant(query, self.block_size, self.scale_fmt)
+                with torch.cuda.stream(self.alt_stream):
+                    k_fp8, k_scale = act_quant(key, self.block_size, self.scale_fmt)
+                current_stream.wait_stream(self.alt_stream)
+            else:
+                q_fp8, q_scale = act_quant_py(query, self.block_size, self.scale_fmt)
+                k_fp8, k_scale = act_quant_py(key, self.block_size, self.scale_fmt)
+
+            # `_get_logits_head_gate` expects a Tensor. For tuple activations, dequantize
+            # to a float tensor here (callsite), keeping `_get_logits_head_gate` backend-agnostic.
+            if isinstance(x, tuple):
+                assert len(x) in (
+                    2,
+                    3,
+                ), "For tuple input, only (x, x_s) or (x, x_s, y) formats are accepted"
+                x_q, x_s = x[0], x[1]
+                if (
+                    x_s is not None
+                    and x_q.dim() == 2
+                    and x_s.dim() == 2
+                    and x_q.shape[0] == x_s.shape[0]
+                ):
+                    m, n = x_q.shape
+                    ng = x_s.shape[1]
+                    if ng > 0 and n % ng == 0:
+                        group = n // ng
+                        x_for_gate = (
+                            x_q.to(torch.float32)
+                            .view(m, ng, group)
+                            .mul_(x_s.to(torch.float32).unsqueeze(-1))
+                            .view(m, n)
+                            .to(torch.bfloat16)
+                        )
+                    else:
+                        x_for_gate = x_q.to(torch.bfloat16)
+                else:
+                    x_for_gate = x_q.to(torch.bfloat16)
+            else:
+                x_for_gate = x
+
+            weights = self._get_logits_head_gate(x_for_gate, q_scale)
+
+        # k_fp8: (seq_len, head_dim) fp8_e4m3fn
+        # k_buffer: (num_total_tokens + page_size, head_dim) fp8_e4m3fn
+        # k_scale: (seq_len, head_dim // block_size = 1) fp8_e4m3fn
+        # k_scale_cache: (num_total_tokens + page_size, head_dim // block_size = 1) fp8_e4m3fn
+        if not forward_batch.out_cache_loc.is_contiguous():
+            forward_batch.out_cache_loc = forward_batch.out_cache_loc.contiguous()
+        forward_batch.token_to_kv_pool.set_index_k_scale_buffer(
+            layer_id=layer_id,
+            loc=forward_batch.out_cache_loc,
+            index_k=k_fp8,
+            index_k_scale=k_scale,
+        )
+
+        if _is_cuda or _is_hip:
+            assert forward_batch.seq_lens_cpu is not None
+            if len(forward_batch.seq_lens_cpu) == 0:
+                # this seems b/c max-pad, no worries?
+                # if x.shape[0] != 0:
+                #     print(
+                #         "HACK: seq_lens empty but x not empty, hackily return all-invalid topk_result"
+                #     )
+                return torch.full(
+                    (x_meta.shape[0], self.index_topk),
+                    -1,
+                    dtype=torch.int,
+                    device=x_meta.device,
+                )
             if (
                 forward_batch.forward_mode.is_decode_or_idle()
                 or forward_batch.forward_mode.is_target_verify()
