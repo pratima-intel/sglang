@@ -42,7 +42,7 @@ RUN source $HOME/.local/bin/env && \
     cd sglang && \
     git checkout ${VER_SGLANG} && \
     uv pip install -e "python[all_cpu]" && \
-    uv pip install torch==${VER_TORCH} torchvision==${VER_TORCHVISION} triton==${VER_TRITON} --force-reinstall && \
+    uv pip install torch==${VER_TORCH} torchvision==${VER_TORCHVISION} triton==${VER_TRITON} intel-openmp --force-reinstall && \
     cd sgl-kernel && \
     cp pyproject_cpu.toml pyproject.toml && \
     uv pip install .
