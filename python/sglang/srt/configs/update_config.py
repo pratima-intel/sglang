@@ -88,7 +88,13 @@ def adjust_tp_num_heads_if_necessary(model_config, tp_size, is_post_update):
 
 def update_intermediate_size(model_config, attr_name, intermediate_padding_size):
     attr_value = intermediate_padding_size
-    if hasattr(model_config, "hf_config") and hasattr(
+    if (
+        hasattr(model_config, "hf_config")
+        and hasattr(model_config.hf_config, "text_config")
+        and hasattr(model_config.hf_config.text_config, attr_name)
+    ):
+        attr_value = getattr(model_config.hf_config.text_config, attr_name)
+    elif hasattr(model_config, "hf_config") and hasattr(
         model_config.hf_config, attr_name
     ):
         attr_value = getattr(model_config.hf_config, attr_name)
@@ -103,6 +109,8 @@ def update_intermediate_size(model_config, attr_name, intermediate_padding_size)
             setattr(model_config.hf_config, attr_name, attr_value)
             if hasattr(model_config, "hf_text_config"):
                 setattr(model_config.hf_text_config, attr_name, attr_value)
+            if hasattr(model_config.hf_config, "text_config"):
+                setattr(model_config.hf_config.text_config, attr_name, attr_value)
         else:
             setattr(model_config, attr_name, attr_value)
 
@@ -170,6 +178,10 @@ def adjust_config_with_unaligned_cpu_tp(
         model_config.hf_text_config.num_attention_heads = num_attention_heads
 
     adjust_tp_num_heads_if_necessary(model_config.hf_config, tp_size, True)
+    if hasattr(model_config.hf_config, "text_config"):
+        adjust_tp_num_heads_if_necessary(
+            model_config.hf_config.text_config, tp_size, True
+        )
 
     intermediate_padding_size = tp_size * get_moe_padding_size(weight_block_size)
     model_config = update_intermediate_size(
@@ -184,28 +196,64 @@ def adjust_config_with_unaligned_cpu_tp(
     model_config = update_intermediate_size(
         model_config, "shared_expert_intermediate_size", intermediate_padding_size
     )
-    if (
-        hasattr(model_config.hf_config, "vision_config")
-        and model_config.hf_config.vision_config.model_type == "siglip_vision_model"
-    ):
-        model_config.hf_config.vision_config.original_num_attention_heads = (
-            model_config.num_attention_heads
+    multimodal_config = [
+        [
+            model_config.hf_config,
+            "vision_config",
+            "siglip_vision_model",
+            "num_attention_heads",
+        ],
+        [model_config.hf_config, "vision_config", "qwen3_vl_moe", "num_heads"],
+        [model_config.hf_config, "vision_config", "qwen3_vl", "num_heads"],
+        [model_config.hf_config, "vision_config", "qwen3_5_moe", "num_heads"],
+        [model_config.hf_config, "vision_config", "qwen3_5", "num_heads"],
+    ]
+    if hasattr(model_config.hf_config, "thinker_config"):
+        multimodal_config.append(
+            [
+                model_config.hf_config.thinker_config,
+                "vision_config",
+                "qwen3_omni_moe_vision_encoder",
+                "num_heads",
+            ]
         )
-        if model_config.hf_config.vision_config.num_attention_heads % tp_size != 0:
-            model_config.hf_config.vision_config.head_dim = (
-                model_config.hf_config.vision_config.hidden_size
-                // model_config.hf_config.vision_config.num_attention_heads
+        multimodal_config.append(
+            [
+                model_config.hf_config.thinker_config,
+                "audio_config",
+                "qwen3_omni_moe_audio_encoder",
+                "encoder_attention_heads",
+            ]
+        )
+    for m_config, config_name, model_type, num_head_str in multimodal_config:
+        if (
+            hasattr(m_config, config_name)
+            and getattr(m_config, config_name).model_type == model_type
+        ):
+            num_heads = getattr(getattr(m_config, config_name), num_head_str)
+            setattr(
+                getattr(m_config, config_name),
+                "original_" + num_head_str,
+                num_heads,
             )
-            from sglang.srt.layers.vocab_parallel_embedding import pad_vocab_size
+            if num_heads % tp_size != 0:
+                from sglang.srt.layers.vocab_parallel_embedding import pad_vocab_size
 
-            pad_size = get_num_heads_padding_size(tp_size, weight_block_size)
-            model_config.hf_config.vision_config.num_attention_heads = pad_vocab_size(
-                model_config.hf_config.vision_config.num_attention_heads, pad_size
+                pad_size = get_num_heads_padding_size(tp_size, weight_block_size)
+                new_num_heads = pad_vocab_size(num_heads, pad_size)
+                setattr(
+                    getattr(m_config, config_name),
+                    num_head_str,
+                    new_num_heads,
+                )
+            setattr(
+                m_config,
+                config_name,
+                update_intermediate_size(
+                    getattr(m_config, config_name),
+                    "intermediate_size",
+                    intermediate_padding_size,
+                ),
             )
-        model_config.hf_config.vision_config = update_intermediate_size(
-            model_config.hf_config.vision_config,
-            "intermediate_size",
-            intermediate_padding_size,
-        )
 
     return model_config
