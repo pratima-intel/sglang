@@ -131,6 +131,7 @@ class Qwen2MoeMLP(nn.Module):
     def forward(
         self,
         x,
+        forward_batch: Optional[ForwardBatch] = None,
         should_allreduce_fusion: bool = False,
         use_reduce_scatter: bool = False,
     ):
@@ -545,7 +546,11 @@ class Qwen2MoeDecoderLayer(nn.Module):
             forward_batch
         )
 
-        hidden_states = self.mlp(hidden_states, forward_batch, use_reduce_scatter)
+        hidden_states = self.mlp(
+            hidden_states,
+            forward_batch=forward_batch,
+            use_reduce_scatter=use_reduce_scatter,
+        )
 
         hidden_states, residual = self.layer_communicator.postprocess_layer(
             hidden_states, residual, forward_batch

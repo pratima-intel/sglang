@@ -396,6 +396,11 @@ class Qwen3_5LinearDecoderLayer(nn.Module):
         use_reduce_scatter = self.layer_communicator.should_use_reduce_scatter(
             forward_batch
         )
+        hidden_states = self.mlp(
+            hidden_states,
+            forward_batch=forward_batch,
+            use_reduce_scatter=use_reduce_scatter,
+        )
 
         should_allreduce_fusion = (
             self.layer_communicator.should_fuse_mlp_allreduce_with_next_layer(
@@ -641,6 +646,11 @@ class Qwen3_5AttentionDecoderLayer(nn.Module):
         )
         use_reduce_scatter = self.layer_communicator.should_use_reduce_scatter(
             forward_batch
+        )
+        hidden_states = self.mlp(
+            hidden_states,
+            forward_batch=forward_batch,
+            use_reduce_scatter=use_reduce_scatter,
         )
 
         should_allreduce_fusion = (
