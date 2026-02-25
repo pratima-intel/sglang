@@ -259,6 +259,7 @@ void multimodal_rotary_embedding_neox_2D_kernel_impl(
   }
 }
 
+
 template <typename scalar_t>
 void rotary_embedding_4D_kernel_impl(
     int64_t* __restrict__ positions,
@@ -612,95 +613,7 @@ void apply_rotary_pos_emb_kernel_impl(
   }
 }
 
-template <typename scalar_t>
-inline scalar_t* get_cache_ptr(
-    int64_t j,
-    scalar_t* cache_t_ptr,
-    scalar_t* cache_h_ptr,
-    scalar_t* cache_w_ptr,
-    int64_t mrope_section_t,
-    int64_t mrope_section_h,
-    int64_t mrope_section_w,
-    bool mrope_interleaved) {
-  if (mrope_interleaved) {
-    if (j % 3 == 1 && j <= mrope_section_h * 3) return cache_h_ptr;
-    if (j % 3 == 2 && j <= mrope_section_w * 3) return cache_w_ptr;
-    return cache_t_ptr;
-  }
-  if (j < mrope_section_t) return cache_t_ptr;
-  if (j < mrope_section_t + mrope_section_h) return cache_h_ptr;
-  return cache_w_ptr;
-}
 
-template <typename scalar_t>
-void multimodal_rotary_embedding_neox_2D_kernel_impl(
-    int64_t* __restrict__ positions,
-    scalar_t* __restrict__ query,
-    scalar_t* __restrict__ key,
-    scalar_t* __restrict__ cos_sin_cache,
-    int64_t rotary_dim,
-    int64_t query_stride_s,
-    int64_t key_stride_s,
-    int64_t num_heads,
-    int64_t num_kv_heads,
-    int64_t head_size,
-    int64_t num_tokens,
-    int64_t mrope_section_t,
-    int64_t mrope_section_h,
-    int64_t mrope_section_w,
-    int64_t positions_stride0,
-    bool mrope_interleaved) {
-  int64_t embed_dim = rotary_dim / 2;
-  auto compute_loop =
-      [&](int64_t token_head, scalar_t* cache_t_ptr, scalar_t* cache_h_ptr, scalar_t* cache_w_ptr, scalar_t* qk) {
-        for (int64_t j = 0; j < embed_dim; ++j) {
-          int64_t x_index = j;
-          int64_t y_index = embed_dim + j;
-
-          int64_t out_x = token_head + x_index;
-          int64_t out_y = token_head + y_index;
-
-          scalar_t* cache_ptr = get_cache_ptr(
-              j,
-              cache_t_ptr,
-              cache_h_ptr,
-              cache_w_ptr,
-              mrope_section_t,
-              mrope_section_h,
-              mrope_section_w,
-              mrope_interleaved);
-          float _cos = cache_ptr[x_index];
-          float _sin = cache_ptr[y_index];
-
-          float _q_x = qk[out_x];
-          float _q_y = qk[out_y];
-
-          qk[out_x] = _q_x * _cos - _q_y * _sin;
-          qk[out_y] = _q_y * _cos + _q_x * _sin;
-        }
-      };
-#pragma omp parallel for
-  for (int64_t token_idx = 0; token_idx < num_tokens; ++token_idx) {
-    int64_t pos_t = positions[token_idx];
-    int64_t pos_h = positions[positions_stride0 + token_idx];
-    int64_t pos_w = positions[positions_stride0 * 2 + token_idx];
-    scalar_t* cache_t_ptr = cos_sin_cache + pos_t * rotary_dim;
-    scalar_t* cache_h_ptr = cos_sin_cache + pos_h * rotary_dim;
-    scalar_t* cache_w_ptr = cos_sin_cache + pos_w * rotary_dim;
-
-    for (int64_t i = 0; i < num_heads; ++i) {
-      int64_t head_idx = i;
-      int64_t token_head = token_idx * query_stride_s + head_idx * head_size;
-      compute_loop(token_head, cache_t_ptr, cache_h_ptr, cache_w_ptr, query);
-    }
-
-    for (int64_t i = 0; i < num_kv_heads; ++i) {
-      int64_t head_idx = i;
-      int64_t token_head = token_idx * key_stride_s + head_idx * head_size;
-      compute_loop(token_head, cache_t_ptr, cache_h_ptr, cache_w_ptr, key);
-    }
-  }
-}
 
 template <typename scalar_t>
 void rotary_embedding_2D_kernel_impl(

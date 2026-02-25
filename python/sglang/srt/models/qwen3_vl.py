@@ -315,13 +315,7 @@ class Qwen3VLMoeVisionModel(nn.Module, RotaryPosMixin):
         else:
             self.pos_embed = PPMissingLayer()
 
-        self.rotary_pos_emb = get_rope(
-            head_size=head_dim,
-            rotary_dim=head_dim // 2,
-            max_position=8192,
-            base=10000.0,
-            is_neox_style=True,
-        )
+
         if _is_cpu and hasattr(vision_config, "original_num_heads"):
             head_dim = self.hidden_size // vision_config.original_num_heads
             from sglang.srt.layers.layernorm import LayerNorm
@@ -329,6 +323,13 @@ class Qwen3VLMoeVisionModel(nn.Module, RotaryPosMixin):
         else:
             head_dim = self.hidden_size // self.num_heads
             norm_layer = partial(nn.LayerNorm, eps=norm_eps)
+        self.rotary_pos_emb = get_rope(
+            head_size=head_dim,
+            rotary_dim=head_dim // 2,
+            max_position=8192,
+            base=10000.0,
+            is_neox_style=True,
+        )
         self.blocks = nn.ModuleList(
             [
                 Qwen3_VisionBlock(
