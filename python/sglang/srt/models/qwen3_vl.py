@@ -164,6 +164,7 @@ class Qwen3_VisionBlock(nn.Module):
         num_heads: int,
         intermediate_dim: int,
         hidden_act="silu",
+        head_size: Optional[int] = None,
         norm_layer: Optional[Callable[[int], nn.Module]] = None,
         quant_config: Optional[QuantizationConfig] = None,
         prefix: str = "",
@@ -342,6 +343,7 @@ class Qwen3VLMoeVisionModel(nn.Module, RotaryPosMixin):
                 Qwen3_VisionBlock(
                     dim=self.hidden_size,
                     num_heads=self.num_heads,
+                    head_size=head_dim,
                     intermediate_dim=vision_config.intermediate_size,
                     hidden_act=vision_config.hidden_act,
                     norm_layer=norm_layer,
