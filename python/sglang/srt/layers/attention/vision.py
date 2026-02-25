@@ -16,8 +16,8 @@ from sglang.srt.environ import envs
 from sglang.srt.layers.dp_attention import get_attention_tp_rank, get_attention_tp_size
 from sglang.srt.models.utils import apply_qk_norm
 from sglang.srt.utils import (
-    get_bool_env_var,
     cpu_has_amx_support,
+    get_bool_env_var,
     get_device_capability,
     is_blackwell,
     is_cpu,
@@ -260,7 +260,7 @@ class VisionSdpaAttention(nn.Module):
             del attn_weights, v
         elif _is_cpu and _is_cpu_amx_available and cu_seqlens is not None:
             starts = cu_seqlens[:-1].tolist()
-            ends   = cu_seqlens[1:].tolist()
+            ends = cu_seqlens[1:].tolist()
             output = torch.empty_like(q)
             for start, end in zip(starts, ends):
                 output[:, :, start:end, :] = F.scaled_dot_product_attention(
@@ -469,7 +469,9 @@ class VisionAMXAttention(nn.Module):
         **kwargs,
     ):
         if not _is_cpu or not _is_cpu_amx_available:
-            raise Exception("VisionAMXAttention is only available for cpu with amx support")
+            raise Exception(
+                "VisionAMXAttention is only available for cpu with amx support"
+            )
         super().__init__()
 
     def forward(
@@ -513,7 +515,6 @@ class VisionAMXAttention(nn.Module):
         )
 
         return output
-
 
 
 class VisionAscendAttention(nn.Module):
@@ -854,9 +855,7 @@ class VisionAttention(nn.Module):
             q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
 
             # [s, b, head, head_size] --> [b, s, head, head_size]
-            q, k, v = [
-                rearrange(x, "s b ... -> b s ...") for x in (q, k, v)
-            ]
+            q, k, v = [rearrange(x, "s b ... -> b s ...") for x in (q, k, v)]
 
         cos = None
         sin = None

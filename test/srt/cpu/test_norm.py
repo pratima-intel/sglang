@@ -251,7 +251,9 @@ class TestLayerNorm(CustomTestCase):
         torch.testing.assert_close(ln_out, ref_ln_out, atol=atol, rtol=rtol)
 
         ln_out = torch.ops.sgl_kernel.layernorm_cpu(x, weight, bias, variance_epsilon)
-        ref_ln_out = self._forward_native(x, weight, variance_epsilon, residual=None, bias=bias)
+        ref_ln_out = self._forward_native(
+            x, weight, variance_epsilon, residual=None, bias=bias
+        )
         torch.testing.assert_close(ln_out, ref_ln_out, atol=atol, rtol=rtol)
 
         residual = torch.randn([m, hidden_size], dtype=dtype)
@@ -280,7 +282,6 @@ class TestLayerNorm(CustomTestCase):
         torch.testing.assert_close(add_ln_out, ref_add_ln_out, atol=atol, rtol=rtol)
         torch.testing.assert_close(residual, ref_residual, atol=atol, rtol=rtol)
 
-
     @parametrize(
         l=[4096, 1024],
         m=[1, 4],
@@ -301,7 +302,9 @@ class TestLayerNorm(CustomTestCase):
         torch.testing.assert_close(ln_out, ref_ln_out, atol=atol, rtol=rtol)
 
         ln_out = torch.ops.sgl_kernel.layernorm_cpu(x, weight, bias, variance_epsilon)
-        ref_ln_out = self._forward_native(x, weight, variance_epsilon, residual=None, bias=bias)
+        ref_ln_out = self._forward_native(
+            x, weight, variance_epsilon, residual=None, bias=bias
+        )
         torch.testing.assert_close(ln_out, ref_ln_out, atol=atol, rtol=rtol)
 
         residual = torch.randn([l, m, hidden_size], dtype=dtype)
@@ -328,6 +331,7 @@ class TestLayerNorm(CustomTestCase):
 
         torch.testing.assert_close(add_ln_out, ref_add_ln_out, atol=atol, rtol=rtol)
         torch.testing.assert_close(residual, ref_residual, atol=atol, rtol=rtol)
+
 
 if __name__ == "__main__":
     unittest.main()

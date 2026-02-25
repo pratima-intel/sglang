@@ -32,8 +32,8 @@ from sglang.srt.distributed import (
 from sglang.srt.distributed.parallel_state import get_pp_group
 from sglang.srt.environ import envs
 from sglang.srt.layers.attention.vision import VisionAttention
-from sglang.srt.layers.dp_attention import is_dp_attention_enabled
 from sglang.srt.layers.conv import Conv3d
+from sglang.srt.layers.dp_attention import is_dp_attention_enabled
 from sglang.srt.layers.linear import ColumnParallelLinear, RowParallelLinear
 from sglang.srt.layers.logits_processor import LogitsProcessor
 from sglang.srt.layers.pooler import Pooler, PoolingType
@@ -64,8 +64,15 @@ from sglang.srt.models.utils import (
 from sglang.srt.multimodal.mm_utils import run_dp_sharded_mrope_vision_model
 from sglang.srt.multimodal.vit_cuda_graph_runner import ViTCudaGraphRunner
 from sglang.srt.server_args import get_global_server_args
-from sglang.srt.utils import add_prefix, get_int_env_var, is_npu, is_cpu, cpu_has_amx_support
+from sglang.srt.utils import (
+    add_prefix,
+    cpu_has_amx_support,
+    get_int_env_var,
+    is_cpu,
+    is_npu,
+)
 from sglang.srt.utils.hf_transformers_utils import get_processor
+
 logger = logging.getLogger(__name__)
 
 
@@ -315,10 +322,10 @@ class Qwen3VLMoeVisionModel(nn.Module, RotaryPosMixin):
         else:
             self.pos_embed = PPMissingLayer()
 
-
         if _is_cpu and hasattr(vision_config, "original_num_heads"):
             head_dim = self.hidden_size // vision_config.original_num_heads
             from sglang.srt.layers.layernorm import LayerNorm
+
             norm_layer = partial(LayerNorm, eps=norm_eps, dtype=self.dtype)
         else:
             head_dim = self.hidden_size // self.num_heads
@@ -965,7 +972,14 @@ class Qwen3VLForConditionalGeneration(nn.Module):
                 name = name.replace(r"model.language_model.", r"model.")
             layer_id = get_layer_id(name)
 
-            if self.pp_group.is_last_rank and "model.embed_tokens.weight" in name:
+            # port fix from main https://github.com/sgl-project/sglang/pull/18024
+            # Only copy embed_tokens to lm_head when tie_word_embeddings=True
+            # For models with tie_word_embeddings=False (e.g. 8B), lm_head has independent weights
+            if (
+                self.pp_group.is_last_rank
+                and "model.embed_tokens.weight" in name
+                and self.config.tie_word_embeddings
+            ):
                 if "lm_head.weight" in params_dict:
                     lm_head_param = params_dict["lm_head.weight"]
                     weight_loader = getattr(

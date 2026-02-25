@@ -31,7 +31,6 @@ from sglang.srt.configs.qwen3_omni import (
 )
 from sglang.srt.configs.qwen3_vl import Qwen3VLMoeConfig
 from sglang.srt.layers.attention.vision import VisionAttention
-from sglang.srt.layers.layernorm import RMSNorm
 from sglang.srt.layers.linear import (
     ColumnParallelLinear,
     ReplicatedLinear,
@@ -47,7 +46,7 @@ from sglang.srt.models.qwen3_vl_moe import (
     Qwen3VLMoeForConditionalGeneration,
     load_fused_expert_weights,
 )
-from sglang.srt.utils import add_prefix, is_cpu, logger, is_npu, cpu_has_amx_support
+from sglang.srt.utils import add_prefix, cpu_has_amx_support, is_cpu, is_npu, logger
 
 _is_cpu = is_cpu()
 _is_cpu_amx_available = cpu_has_amx_support()

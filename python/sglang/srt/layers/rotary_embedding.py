@@ -1549,7 +1549,7 @@ class MRotaryEmbedding(RotaryEmbedding):
         key = torch.cat((key_rot, key_pass), dim=-1).reshape(key_shape)
         return query, key
 
-    def forward_cuda(
+    def forward(
         self,
         positions: torch.Tensor,
         query: torch.Tensor,

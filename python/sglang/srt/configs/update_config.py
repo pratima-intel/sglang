@@ -200,7 +200,9 @@ def adjust_config_with_unaligned_cpu_tp(
             if num_heads % tp_size != 0:
                 from sglang.srt.layers.vocab_parallel_embedding import pad_vocab_size
 
-                pad_size = get_num_heads_padding_size(tp_size, weight_block_size, 128) # hardcode 128 head dim here for qwen-omni
+                pad_size = get_num_heads_padding_size(
+                    tp_size, weight_block_size, 128
+                )  # hardcode 128 head dim here for qwen-omni
                 new_num_heads = pad_vocab_size(num_heads, pad_size)
                 setattr(
                     getattr(m_config, config_name),

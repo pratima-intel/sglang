@@ -10,7 +10,6 @@ namespace {
 //   4. TODO: apply head dimension blocking to optimize GQA
 //
 
-
 template <typename scalar_t, typename index_t, int BLOCK_M, int BLOCK_N>
 void extend_attention_kernel_impl(
     scalar_t* __restrict__ o_extend,

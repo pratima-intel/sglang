@@ -20,7 +20,6 @@ from sglang.srt.managers.schedule_batch import (
 from sglang.srt.server_args import get_global_server_args
 from sglang.srt.utils import (
     envs,
-    get_bool_env_var,
     is_cpu,
     is_npu,
     is_xpu,
