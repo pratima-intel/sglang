@@ -707,9 +707,21 @@ class MergedColumnParallelLinear(ColumnParallelLinear):
 
         current_shard_offset = 0
         shard_offsets: List[Tuple[int, int, int]] = []
+        padded_weight_size = 0
         for i, output_size in enumerate(self.output_sizes):
             shard_offsets.append((i, current_shard_offset, output_size))
             current_shard_offset += output_size
+            padded_weight_size += output_size
+        # Todo: make the pad general
+        if _is_cpu:
+            if padded_weight_size > loaded_weight.size(0):
+                pad_size = padded_weight_size - loaded_weight.size(param.output_dim)
+                q, k , v = loaded_weight.split_with_sizes([2048,2048,4096], dim=0)
+                q = torch.cat([q, torch.zeros(2*128, loaded_weight.size(1)).to(loaded_weight.dtype)], dim=param.output_dim)
+                k = torch.cat([k, torch.zeros(2*128, loaded_weight.size(1)).to(loaded_weight.dtype)], dim=param.output_dim)
+                v = torch.cat([v, torch.zeros(4*128, loaded_weight.size(1)).to(loaded_weight.dtype)], dim=param.output_dim)
+                loaded_weight_ = torch.cat([q,k],dim=0)
+                loaded_weight = torch.cat([loaded_weight_,v],dim=0)
 
         for shard_id, shard_offset, shard_size in shard_offsets:
             # Special case for Quantization.
@@ -722,7 +734,6 @@ class MergedColumnParallelLinear(ColumnParallelLinear):
                 shard_size, shard_offset = param.adjust_shard_indexes_for_packing(
                     shard_size=shard_size, shard_offset=shard_offset
                 )
-
             loaded_weight_shard = loaded_weight.narrow(
                 param.output_dim, shard_offset, shard_size
             )
@@ -743,11 +754,22 @@ class MergedColumnParallelLinear(ColumnParallelLinear):
         shard_block_sizes = []
         shard_block_offsets = []
         current_block_offset = 0
+        padded_weight_size=0
         for output_size in self.output_sizes:
             shard_block_size = (output_size + block_n - 1) // block_n
             shard_block_sizes.append(shard_block_size)
             shard_block_offsets.append(current_block_offset)
             current_block_offset += shard_block_size
+            padded_weight_size+=shard_block_size
+        # Todo: make the pad general
+        if _is_cpu:
+            if padded_weight_size > loaded_weight.size(0):
+                q, k , v = loaded_weight.split_with_sizes([16,16,32], dim=0)
+                q = torch.cat([q, torch.zeros(2, loaded_weight.size(1)).to(loaded_weight.dtype)], dim=param.output_dim)
+                k = torch.cat([k, torch.zeros(2, loaded_weight.size(1)).to(loaded_weight.dtype)], dim=param.output_dim)
+                v = torch.cat([v, torch.zeros(4, loaded_weight.size(1)).to(loaded_weight.dtype)], dim=param.output_dim)
+                loaded_weight_ = torch.cat([q,k],dim=0)
+                loaded_weight = torch.cat([loaded_weight_,v],dim=0)
 
         # Load each shard
         for shard_id, (shard_block_offset, shard_block_size) in enumerate(
