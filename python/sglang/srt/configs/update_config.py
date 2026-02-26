@@ -35,7 +35,14 @@ def get_moe_padding_size(weight_block_size):
     return DEFAULT_MOE_PADDING_SIZE
 
 
-def get_num_heads_padding_size(tp_size, weight_block_size, head_dim):
+def get_num_heads_padding_size(tp_size, weight_block_size, head_dim=None):
+    if head_dim is None:
+        pad_size = (
+            tp_size * 2
+            if tp_size % 2 == 1 and weight_block_size is not None
+            else tp_size
+        )
+        return pad_size
     pad_size = tp_size
 
     if weight_block_size is not None and head_dim % weight_block_size[0] != 0:
@@ -46,6 +53,7 @@ def get_num_heads_padding_size(tp_size, weight_block_size, head_dim):
         )
 
     return pad_size
+
 
 
 def adjust_tp_num_heads_if_necessary(model_config, tp_size, is_post_update):
@@ -225,6 +233,7 @@ def adjust_config_with_unaligned_cpu_tp(
                 "encoder_attention_heads",
             ]
         )
+
     for m_config, config_name, model_type, num_head_str in multimodal_config:
         if (
             hasattr(m_config, config_name)
@@ -239,7 +248,7 @@ def adjust_config_with_unaligned_cpu_tp(
             if num_heads % tp_size != 0:
                 from sglang.srt.layers.vocab_parallel_embedding import pad_vocab_size
 
-                pad_size = get_num_heads_padding_size(tp_size, weight_block_size)
+                pad_size = get_num_heads_padding_size(tp_size, weight_block_size, head_dim)
                 new_num_heads = pad_vocab_size(num_heads, pad_size)
                 setattr(
                     getattr(m_config, config_name),
