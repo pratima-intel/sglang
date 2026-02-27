@@ -23,6 +23,7 @@ from transformers import AutoImageProcessor
 from sglang.srt.configs.device_config import DeviceConfig
 from sglang.srt.configs.load_config import LoadConfig
 from sglang.srt.configs.model_config import ModelConfig
+from sglang.srt.configs.update_config import adjust_config_with_unaligned_cpu_tp
 from sglang.srt.disaggregation.encode_receiver import EmbeddingData
 from sglang.srt.distributed.parallel_state import (
     get_default_distributed_backend,
@@ -165,6 +166,10 @@ class MMEncoder:
         )
 
         self.device = server_args.device
+        if self.device == "cpu":
+            self.model_config = adjust_config_with_unaligned_cpu_tp(
+                self.model_config, self.load_config, server_args.tp_size
+            )
         self.gpu_id = server_args.base_gpu_id + rank
 
         self.device_config = DeviceConfig(
