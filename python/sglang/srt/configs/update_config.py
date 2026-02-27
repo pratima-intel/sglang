@@ -148,11 +148,7 @@ def adjust_config_with_unaligned_cpu_tp(
         model_config.num_attention_heads % tp_size != 0
         or model_config.get_total_num_kv_heads() % tp_size != 0
     ):
-        # Compute the head_dim using the model_config.num_attention_heads before padding
-        if not hasattr(model_config.hf_config, "head_dim"):
-            model_config.hf_config.head_dim = (
-                model_config.hidden_size // model_config.num_attention_heads
-            )
+
         if hasattr(model_config.hf_config, "qk_nope_head_dim") and hasattr(
             model_config.hf_config, "qk_rope_head_dim"
         ):
@@ -168,13 +164,17 @@ def adjust_config_with_unaligned_cpu_tp(
         from sglang.srt.layers.vocab_parallel_embedding import pad_vocab_size
 
         head_dim = (
-            model_config.hf_config.qk_head_dim
-            if hasattr(model_config.hf_config, "qk_head_dim")
-            else model_config.hf_config.head_dim
-        )
+                model_config.hidden_size // model_config.num_attention_heads
+            )
+        if hasattr(model_config.hf_config, "qk_head_dim"):
+            head_dim =  model_config.hf_config.qk_head_dim
+        elif hasattr(model_config.hf_text_config, "head_dim"):
+            head_dim =  model_config.hf_text_config.head_dim
+        elif hasattr(model_config.hf_config, "head_dim"):
+            head_dim =  model_config.hf_text_config.head_dim
+
         pad_size = get_num_heads_padding_size(tp_size, weight_block_size, head_dim)
         num_key_value_heads = pad_vocab_size(total_kv_heads, pad_size)
-
         model_config.num_key_value_heads = num_key_value_heads
         model_config.hf_config.num_key_value_heads = num_key_value_heads
         model_config.hf_text_config.num_key_value_heads = num_key_value_heads
@@ -203,6 +203,7 @@ def adjust_config_with_unaligned_cpu_tp(
     model_config = update_intermediate_size(
         model_config, "shared_expert_intermediate_size", intermediate_padding_size
     )
+
     multimodal_config = [
         [
             model_config.hf_config,
