@@ -714,7 +714,10 @@ class MergedColumnParallelLinear(ColumnParallelLinear):
             from sglang.srt.model_loader.weight_utils import (
                 pad_loaded_weight,
             )
-            loaded_weight = pad_loaded_weight(loaded_weight, param.output_dim, self.output_sizes)
+
+            loaded_weight = pad_loaded_weight(
+                loaded_weight, param.output_dim, self.output_sizes
+            )
 
         for shard_id, shard_offset, shard_size in shard_offsets:
             # Special case for Quantization.
@@ -757,7 +760,10 @@ class MergedColumnParallelLinear(ColumnParallelLinear):
             from sglang.srt.model_loader.weight_utils import (
                 pad_loaded_weight,
             )
-            loaded_weight = pad_loaded_weight(loaded_weight, param.output_dim, shard_block_sizes)
+
+            loaded_weight = pad_loaded_weight(
+                loaded_weight, param.output_dim, shard_block_sizes
+            )
 
         # Load each shard
         for shard_id, (shard_block_offset, shard_block_size) in enumerate(

@@ -55,7 +55,6 @@ def get_num_heads_padding_size(tp_size, weight_block_size, head_dim=None):
     return pad_size
 
 
-
 def adjust_tp_num_heads_if_necessary(model_config, tp_size, is_post_update):
     # is_post_update: whether to update an existing config
     from sglang.srt.layers.vocab_parallel_embedding import pad_vocab_size
@@ -248,7 +247,9 @@ def adjust_config_with_unaligned_cpu_tp(
             if num_heads % tp_size != 0:
                 from sglang.srt.layers.vocab_parallel_embedding import pad_vocab_size
 
-                pad_size = get_num_heads_padding_size(tp_size, weight_block_size, head_dim)
+                pad_size = get_num_heads_padding_size(
+                    tp_size, weight_block_size, head_dim
+                )
                 new_num_heads = pad_vocab_size(num_heads, pad_size)
                 setattr(
                     getattr(m_config, config_name),
