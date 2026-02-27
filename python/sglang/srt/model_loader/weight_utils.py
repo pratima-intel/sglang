@@ -1065,7 +1065,7 @@ def sharded_weight_loader(shard_axis: int) -> LoaderFunction:
 
         if (
             is_cpu()
-            and loaded_weight.size(0) % get_tensor_model_parallel_world_size() != 0
+            and (loaded_weight.size(0) % get_tensor_model_parallel_world_size() != 0 or loaded_weight.size(0) < get_tensor_model_parallel_world_size() * shard_size)
             and loaded_weight.dim() == 1
         ):
             param_data = param.data  # view copy on param for uneven padding

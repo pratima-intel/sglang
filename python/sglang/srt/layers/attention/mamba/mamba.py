@@ -110,9 +110,8 @@ def mamba_v2_sharded_weight_loader(
 
             # CPU logic of padding size for qwen3-next
             # TODO : make this common for all mamba.
-            if is_cpu() and loaded_weight.size(0) % tp_size != 0:
+            if is_cpu() and (loaded_weight.size(0) < full_dim_sum):
                 import copy
-
                 loaded_weight_ = copy.deepcopy(loaded_weight)
                 q, k, v = torch.split(
                     loaded_weight_,
