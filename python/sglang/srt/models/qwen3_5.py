@@ -74,6 +74,7 @@ from sglang.srt.models.qwen3_vl import Qwen3VLForConditionalGeneration
 # Utils
 from sglang.srt.utils import (
     add_prefix,
+    cpu_has_amx_support,
     is_cpu,
     is_cuda,
     is_npu,
@@ -86,6 +87,7 @@ logger = logging.getLogger(__name__)
 _is_cuda = is_cuda()
 _is_npu = is_npu()
 _is_cpu = is_cpu()
+_is_cpu_amx_available = cpu_has_amx_support()
 
 cached_get_processor = lru_cache(get_processor)
 
@@ -1136,6 +1138,17 @@ class Qwen3_5ForConditionalGeneration(Qwen3VLForConditionalGeneration):
 
                 weight_loader = getattr(param, "weight_loader", default_weight_loader)
                 weight_loader(param, loaded_weight)
+                if (
+                    self.config.tie_word_embeddings
+                    and name == "model.embed_tokens.weight"
+                    and _is_cpu
+                    and _is_cpu_amx_available
+                ):
+                    param_lm_head = params_dict["lm_head.weight"]
+                    weight_loader = getattr(
+                        param_lm_head, "weight_loader", default_weight_loader
+                    )
+                    weight_loader(param_lm_head, loaded_weight)
             loaded_params.add(name)
         return loaded_params
 
