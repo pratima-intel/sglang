@@ -13,7 +13,6 @@ from sgl_kernel.allreduce import *
 from sgl_kernel.attention import (
     cutlass_mla_decode,
     cutlass_mla_get_workspace_size,
-    lightning_attention_decode,
     merge_state,
     merge_state_v2,
 )
@@ -31,10 +30,14 @@ from sgl_kernel.elementwise import (
     gemma_fused_add_rmsnorm,
     gemma_rmsnorm,
     rmsnorm,
+    rotary_embedding,
     silu_and_mul,
 )
-from sgl_kernel.expert_specialization import es_fp8_blockwise_scaled_grouped_mm
-from sgl_kernel.fused_moe import fused_marlin_moe
+from sgl_kernel.expert_specialization import (
+    es_fp8_blockwise_scaled_grouped_mm,
+    es_sm100_mxfp8_blockscaled_grouped_mm,
+    es_sm100_mxfp8_blockscaled_grouped_quant,
+)
 from sgl_kernel.gemm import (
     awq_dequantize,
     bmm_fp8,
@@ -44,7 +47,6 @@ from sgl_kernel.gemm import (
     fp8_blockwise_scaled_mm,
     fp8_scaled_mm,
     gptq_gemm,
-    gptq_marlin_gemm,
     gptq_shuffle,
     int8_scaled_mm,
     qserve_w4a8_per_chn_gemm,
@@ -61,35 +63,32 @@ from sgl_kernel.gemm import (
     silu_and_mul_scaled_fp4_grouped_quant,
 )
 from sgl_kernel.grammar import apply_token_bitmask_inplace_cuda
-from sgl_kernel.hadamard import (
-    hadamard_transform,
-    hadamard_transform_12n,
-    hadamard_transform_20n,
-    hadamard_transform_28n,
-    hadamard_transform_40n,
-)
 from sgl_kernel.kvcacheio import (
     transfer_kv_all_layer,
     transfer_kv_all_layer_mla,
     transfer_kv_per_layer,
     transfer_kv_per_layer_mla,
 )
-from sgl_kernel.mamba import causal_conv1d_fwd, causal_conv1d_update
-from sgl_kernel.marlin import (
-    awq_marlin_moe_repack,
-    awq_marlin_repack,
-    gptq_marlin_repack,
+from sgl_kernel.mamba import (
+    causal_conv1d_fn_cpu,
+    causal_conv1d_fwd,
+    causal_conv1d_update,
+    causal_conv1d_update_cpu,
+    chunk_gated_delta_rule_cpu,
 )
-from sgl_kernel.memory import set_kv_buffer_kernel
+from sgl_kernel.memory import set_kv_buffer_kernel, weak_ref_tensor
 from sgl_kernel.moe import (
     apply_shuffle_mul_sum,
     cutlass_fp4_group_mm,
     fp8_blockwise_scaled_grouped_mm,
+    fused_qk_norm_rope,
+    kimi_k2_moe_fused_gate,
     moe_align_block_size,
     moe_fused_gate,
     moe_sum,
     moe_sum_reduce,
     prepare_moe_input,
+    topk_sigmoid,
     topk_softmax,
 )
 from sgl_kernel.quantization import (
@@ -101,13 +100,9 @@ from sgl_kernel.quantization import (
     ggml_mul_mat_vec_a8,
 )
 from sgl_kernel.sampling import (
-    min_p_sampling_from_probs,
     top_k_mask_logits,
     top_k_renorm_prob,
-    top_k_top_p_sampling_from_logits,
-    top_k_top_p_sampling_from_probs,
     top_p_renorm_prob,
-    top_p_sampling_from_probs,
 )
 from sgl_kernel.speculative import (
     build_tree_kernel_efficient,

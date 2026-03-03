@@ -164,6 +164,35 @@ class PyNcclCommunicator:
             cudaStream_t(stream.cuda_stream),
         )
 
+    def outplace_all_reduce(
+        self,
+        in_tensor: torch.Tensor,
+        out_tensor: Optional[torch.Tensor] = None,
+        op: ReduceOp = ReduceOp.SUM,
+        stream=None,
+    ) -> Optional[torch.Tensor]:
+        if self.disabled:
+            return None
+        assert in_tensor.device == self.device, (
+            f"this nccl communicator is created to work on {self.device}, "
+            f"but the input tensor is on {in_tensor.device}"
+        )
+
+        if out_tensor is None:
+            out_tensor = torch.empty_like(in_tensor)
+
+        stream = self._resolve_stream(stream)
+        self.nccl.ncclAllReduce(
+            buffer_type(in_tensor.data_ptr()),  # sendbuff
+            buffer_type(out_tensor.data_ptr()),  # recvbuff - DIFFERENT pointer
+            in_tensor.numel(),
+            ncclDataTypeEnum.from_torch(in_tensor.dtype),
+            ncclRedOpTypeEnum.from_torch(op),
+            self.comm,
+            cudaStream_t(stream.cuda_stream),
+        )
+        return out_tensor
+
     def all_gather(
         self,
         output_tensor: torch.Tensor,
@@ -208,6 +237,34 @@ class PyNcclCommunicator:
                 self.comm,
                 cudaStream_t(stream.cuda_stream),
             )
+
+    def cp_all_gather_into_tensor(
+        self,
+        output_tensor: torch.Tensor,
+        input_tensor: torch.Tensor,
+        stream=None,
+        sizes: Optional[list[int]] = None,
+    ):
+        """
+        Currently, it is mainly used in context parallelism,
+        primarily leveraging pynccl to implement non-blocking allgather communication.
+        """
+        # nccl communicator created on a specific device
+        # will only work on tensors on the same device
+        # otherwise it will cause "illegal memory access"
+        assert input_tensor.device == self.device, (
+            f"this nccl communicator is created to work on {self.device}, "
+            f"but the input tensor is on {input_tensor.device}"
+        )
+        stream = self._resolve_stream(stream)
+        self.nccl.ncclAllGather(
+            buffer_type(input_tensor.data_ptr()),
+            buffer_type(output_tensor.data_ptr()),
+            input_tensor.numel(),
+            ncclDataTypeEnum.from_torch(input_tensor.dtype),
+            self.comm,
+            cudaStream_t(stream.cuda_stream),
+        )
 
     def reduce_scatter(
         self,
