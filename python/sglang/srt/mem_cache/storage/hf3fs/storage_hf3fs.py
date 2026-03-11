@@ -19,7 +19,7 @@ from sglang.srt.mem_cache.hicache_storage import (
 )
 from sglang.srt.mem_cache.memory_pool_host import HostKVCache
 from sglang.srt.mem_cache.storage.hf3fs.hf3fs_client import Hf3fsClient
-from sglang.srt.metrics.collector import StorageMetrics
+from sglang.srt.observability.metrics_collector import StorageMetrics
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +120,12 @@ def synchronized():
 
 
 def create_hf3fs_client(
-    path: str, size: int, bytes_per_page: int, entries: int, use_mock: bool = False
+    path: str,
+    size: int,
+    bytes_per_page: int,
+    entries: int,
+    client_timeout: int,
+    use_mock: bool = False,
 ) -> Hf3fsClient:
     """Factory function to create appropriate HF3FS client.
 
@@ -143,7 +148,7 @@ def create_hf3fs_client(
             Hf3fsUsrBioClient,
         )
 
-        return Hf3fsUsrBioClient(path, size, bytes_per_page, entries)
+        return Hf3fsUsrBioClient(path, size, bytes_per_page, entries, client_timeout)
 
 
 class HiCacheHF3FS(HiCacheStorage):
@@ -159,11 +164,13 @@ class HiCacheHF3FS(HiCacheStorage):
         numjobs: int,
         bytes_per_page: int,
         entries: int,
+        client_timeout: int,
         dtype: torch.dtype,
         metadata_client: Hf3fsMetadataInterface,
         is_mla_model: bool = False,
         is_page_first_layout: bool = False,
         use_mock_client: bool = False,
+        enable_storage_metrics: bool = False,
     ):
         self.rank = rank
         self.file_path = file_path
@@ -172,10 +179,12 @@ class HiCacheHF3FS(HiCacheStorage):
         self.bytes_per_page = bytes_per_page
         self.gb_per_page = bytes_per_page / (1 << 30)
         self.entries = entries
+        self.client_timeout = client_timeout
         self.dtype = dtype
         self.metadata_client = metadata_client
         self.is_mla_model = is_mla_model
         self.is_page_first_layout = is_page_first_layout
+        self.enable_storage_metrics = enable_storage_metrics
         self.numel = self.bytes_per_page // self.dtype.itemsize
         self.num_pages = self.file_size // self.bytes_per_page
         self.skip_backup = False
@@ -200,6 +209,7 @@ class HiCacheHF3FS(HiCacheStorage):
                 self.file_size,
                 self.bytes_per_page,
                 self.entries,
+                self.client_timeout,
                 use_mock_client,
             )
             for _ in range(numjobs)
@@ -275,6 +285,7 @@ class HiCacheHF3FS(HiCacheStorage):
                 numjobs=16,
                 bytes_per_page=bytes_per_page,
                 entries=8,
+                client_timeout=5,
                 dtype=dtype,
                 metadata_client=Hf3fsLocalMetadataClient(),
                 is_page_first_layout=is_page_first_layout,
@@ -324,21 +335,26 @@ class HiCacheHF3FS(HiCacheStorage):
             numjobs=int(config["numjobs"]),
             bytes_per_page=bytes_per_page,
             entries=int(config["entries"]),
+            client_timeout=config.get("client_timeout", 5),
             dtype=dtype,
             metadata_client=metadata_client,
             is_mla_model=is_mla_model,
             is_page_first_layout=is_page_first_layout,
             use_mock_client=use_mock_client,
+            enable_storage_metrics=storage_config.enable_storage_metrics,
         )
 
-    @synchronized()
     def _batch_get(
         self,
         keys: List[str],
         values: List[torch.Tensor],
     ) -> List[bool]:
         page_indices = self.metadata_client.get_page_indices(self.rank, keys)
-
+        if len(page_indices) != len(keys):
+            logger.error(
+                f"[Rank {self.rank}] HiCacheHF3FS get: page_indices length {len(page_indices)} mismatch keys length {len(keys)}."
+            )
+            return [False] * len(keys)
         batch_indices, file_offsets = [], []
         for i, page_index in enumerate(page_indices):
             if page_index is not None:
@@ -363,10 +379,12 @@ class HiCacheHF3FS(HiCacheStorage):
 
         end_time = time.perf_counter()
         ionum = len(batch_indices)
-        self.prefetch_pgs.append(ionum)
-        self.prefetch_bandwidth.append(
-            ionum / (end_time - start_time) * self.gb_per_page
-        )
+
+        if self.enable_storage_metrics:
+            self.prefetch_pgs.append(ionum)
+            self.prefetch_bandwidth.append(
+                ionum / (end_time - start_time) * self.gb_per_page
+            )
 
         results = [False] * len(keys)
         for batch_index, read_result in zip(batch_indices, read_results):
@@ -379,7 +397,6 @@ class HiCacheHF3FS(HiCacheStorage):
 
         return results
 
-    @synchronized()
     def _batch_set(
         self,
         keys: List[str],
@@ -394,7 +411,16 @@ class HiCacheHF3FS(HiCacheStorage):
         indices = self.metadata_client.reserve_and_allocate_page_indices(
             self.rank, key_with_prefix
         )
-
+        if len(indices) != len(keys):
+            logger.error(
+                f"[Rank {self.rank}] HiCacheHF3FS batch_get: mismatched lengths {len(indices)} != {len(keys)}"
+            )
+            # free allocated pages
+            if indices:
+                self.metadata_client.confirm_write(
+                    self.rank, [], [index[1] for index in indices]
+                )
+            return [False] * len(keys)
         batch_indices, file_offsets, file_values = [], [], []
         pages_to_release = []
 
@@ -425,8 +451,12 @@ class HiCacheHF3FS(HiCacheStorage):
 
         end_time = time.perf_counter()
         ionum = len(batch_indices)
-        self.backup_pgs.append(ionum)
-        self.backup_bandwidth.append(ionum / (end_time - start_time) * self.gb_per_page)
+
+        if self.enable_storage_metrics:
+            self.backup_pgs.append(ionum)
+            self.backup_bandwidth.append(
+                ionum / (end_time - start_time) * self.gb_per_page
+            )
 
         written_keys_to_confirm = []
         results = [index[0] for index in indices]
@@ -486,7 +516,6 @@ class HiCacheHF3FS(HiCacheStorage):
             logger.error(f"close HiCacheHF3FS: {e}")
         logger.info("close HiCacheHF3FS")
 
-    @synchronized()
     def get_stats(self):
         storage_metrics = StorageMetrics()
         storage_metrics.prefetch_pgs.extend(self.prefetch_pgs)
