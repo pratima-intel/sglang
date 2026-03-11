@@ -190,7 +190,7 @@ class DeepseekMoE(nn.Module):
                 topk_weights,
                 topk_ids,
                 False,  # inplace # See [Note] inplace should be False in fused_experts.
-                0, # CPUQuantMethod.UNQUANT,
+                0,  # CPUQuantMethod.UNQUANT,
                 None,  # w1_scale
                 None,  # w2_scale
                 None,  # w1_zp
