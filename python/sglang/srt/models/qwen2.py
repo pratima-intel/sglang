@@ -204,7 +204,10 @@ class Qwen2DecoderLayer(nn.Module):
         rope_theta = getattr(config, "rope_theta", 1000000)
         rope_scaling = getattr(config, "rope_scaling", None)
         max_position_embeddings = getattr(config, "max_position_embeddings", 32768)
-        head_dim = getattr(config, "head_dim", None)
+        if hasattr(config, "original_num_attention_heads"):
+            head_dim = config.hidden_size // config.original_num_attention_heads
+        else:
+            head_dim = getattr(config, "head_dim", None)
         dual_chunk_attention_config = getattr(
             config, "dual_chunk_attention_config", None
         )

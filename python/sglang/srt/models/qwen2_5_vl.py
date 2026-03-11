@@ -77,9 +77,10 @@ from sglang.srt.models.utils import RotaryPosMixin, WeightsMapper, permute_inv
 from sglang.srt.multimodal.mm_utils import run_dp_sharded_mrope_vision_model
 from sglang.srt.multimodal.vit_cuda_graph_runner import ViTCudaGraphRunner
 from sglang.srt.server_args import get_global_server_args
-from sglang.srt.utils import add_prefix, is_cuda, is_npu
+from sglang.srt.utils import add_prefix, is_cpu, is_cuda, is_npu
 
 _is_cuda = is_cuda()
+_is_cpu = is_cpu()
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +145,7 @@ class Qwen2_5_VisionBlock(nn.Module):
         dim: int,
         intermediate_dim: int,
         num_heads: int,
+        head_size: int,
         hidden_act="silu",
         norm_layer: Type[nn.Module] = None,
         quant_config: Optional[QuantizationConfig] = None,
@@ -159,7 +161,8 @@ class Qwen2_5_VisionBlock(nn.Module):
         self.attn = VisionAttention(
             embed_dim=dim,
             num_heads=num_heads,
-            projection_size=dim,
+            head_size=head_size,
+            projection_size=num_heads * head_size,
             use_qkv_parallel=True,
             proj_bias=True,
             flatten_batch=True,
@@ -217,6 +220,7 @@ class Qwen2_5_VisionPatchMerger(nn.Module):
         self,
         dim: int,
         context_dim: int,
+        padded_context_dim: int,
         spatial_merge_size: int = 2,
         quant_config: Optional[QuantizationConfig] = None,
         prefix: str = "",
@@ -224,6 +228,7 @@ class Qwen2_5_VisionPatchMerger(nn.Module):
     ) -> None:
         super().__init__()
         self.hidden_size = context_dim * (spatial_merge_size**2)
+        self.padded_context_dim = padded_context_dim * (spatial_merge_size**2)
         self.ln_q = RMSNorm(context_dim, eps=1e-6)
         tp_size = 1 if use_data_parallel else get_tensor_model_parallel_world_size()
         tp_rank = 0 if use_data_parallel else get_tensor_model_parallel_rank()
@@ -231,7 +236,7 @@ class Qwen2_5_VisionPatchMerger(nn.Module):
             [
                 ColumnParallelLinear(
                     self.hidden_size,
-                    self.hidden_size,
+                    self.padded_context_dim,
                     bias=True,
                     quant_config=quant_config,
                     prefix=add_prefix("mlp.0", prefix),
@@ -240,7 +245,7 @@ class Qwen2_5_VisionPatchMerger(nn.Module):
                 ),
                 nn.GELU(),
                 RowParallelLinear(
-                    self.hidden_size,
+                    self.padded_context_dim,
                     dim,
                     bias=True,
                     quant_config=quant_config,
@@ -300,7 +305,10 @@ class Qwen2_5_VisionTransformer(nn.Module, RotaryPosMixin):
         )
 
         norm_layer = partial(nn.LayerNorm, eps=norm_eps)
-        head_dim = hidden_size // num_heads
+        if _is_cpu and hasattr(vision_config, "original_num_heads"):
+            head_dim = hidden_size // vision_config.original_num_heads
+        else:
+            head_dim = hidden_size // num_heads
         self.rotary_pos_emb = Qwen2_5_VisionRotaryEmbedding(head_dim // 2)
         self.blocks = nn.ModuleList(
             [
@@ -308,6 +316,7 @@ class Qwen2_5_VisionTransformer(nn.Module, RotaryPosMixin):
                     dim=hidden_size,
                     intermediate_dim=mlp_hidden_size,
                     num_heads=num_heads,
+                    head_size=head_dim,
                     hidden_act=vision_config.hidden_act,
                     norm_layer=norm_layer,
                     quant_config=quant_config,
@@ -320,6 +329,7 @@ class Qwen2_5_VisionTransformer(nn.Module, RotaryPosMixin):
         self.merger = Qwen2_5_VisionPatchMerger(
             dim=vision_config.out_hidden_size,
             context_dim=hidden_size,
+            padded_context_dim=num_heads * head_dim,
             spatial_merge_size=spatial_merge_size,
             quant_config=quant_config,
             prefix=add_prefix("merger", prefix),

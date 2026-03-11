@@ -245,6 +245,7 @@ def adjust_config_with_unaligned_cpu_tp(
         [model_config.hf_config, "vision_config", "qwen3_vl", "num_heads"],
         [model_config.hf_config, "vision_config", "qwen3_5_moe", "num_heads"],
         [model_config.hf_config, "vision_config", "qwen3_5", "num_heads"],
+        [model_config.hf_config, "vision_config", "qwen2_5_vl", "num_heads"],
     ]
     if hasattr(model_config.hf_config, "thinker_config"):
         multimodal_config.append(
