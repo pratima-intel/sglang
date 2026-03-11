@@ -74,9 +74,11 @@ class EmbeddingData:
         )
         self.embedding_list[embedding_data.part_idx] = embedding_data.embedding
 
-    def get_embedding(self, is_concat=False):
+    def get_embedding(self, is_concat=False, device=torch.device("cuda")):
         if is_concat:
-            return torch.concat([embedding.cuda() for embedding in self.embedding_list])
+            return torch.concat(
+                [embedding.to(device) for embedding in self.embedding_list]
+            )
         else:
             return self.embedding_list
 
@@ -197,7 +199,7 @@ class WaitingImageRequest:
             )
         )
 
-    def _try_recv_mm_data(self):
+    def _try_recv_mm_data(self, device):
         if self.status != WaitingImageRequestStatus.PENDING:
             return
         while self.recv_embedding_data is None or not self.recv_embedding_data.ready:
@@ -227,7 +229,9 @@ class WaitingImageRequest:
             else:
                 self.recv_embedding_data.add(recv_obj)
 
-        recv_embedding = self.recv_embedding_data.get_embedding(is_concat=True)
+        recv_embedding = self.recv_embedding_data.get_embedding(
+            is_concat=True, device=device
+        )
         img_grid_thw = self.recv_embedding_data.get_img_grid()
 
         mm_inputs = self.mm_processor.get_mm_data(
@@ -292,6 +296,7 @@ class MMReceiverHTTP(MMReceiverBase):
         self.encode_urls = server_args.encoder_urls
         self.encode_idx = list(range(len(self.encode_urls)))
         self.host = get_local_ip_auto(server_args.host)
+        self.device = server_args.device
         if self.encoder_transfer_backend == "mooncake":
             self.dtype = dtype
             self.embeddings_engine = get_mooncake_transfer_engine()
@@ -404,7 +409,7 @@ class MMReceiverHTTP(MMReceiverBase):
         current_time = time.time()
         local_status = []
         for waiting_req in self.waiting_list:
-            waiting_req._try_recv_mm_data()
+            waiting_req._try_recv_mm_data(self.device)
             if current_time - waiting_req.start_time > self.wait_timeout:
                 waiting_req.status = WaitingImageRequestStatus.TIMEOUT
             local_status.append(waiting_req.status)
