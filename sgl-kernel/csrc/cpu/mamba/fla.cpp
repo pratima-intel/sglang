@@ -1325,71 +1325,39 @@ at::Tensor fused_sigmoid_gating_delta_rule_update_cpu(
   int64_t v_strideH = v.stride(2);
   at::Tensor core_attn_out = at::empty({batch_size, seq_len, v_num_heads, v_head_dim}, q.options());
   at::Tensor qk_scale_buf = at::empty({2 * batch_size, seq_len, num_heads}, at::kFloat);
-  AT_DISPATCH_REDUCED_FLOATING_TYPES(q.scalar_type(), "fused_sigmoid_gating_delta_rule_update_kernel_impl", [&] {
-    if (A_log.scalar_type() == at::kFloat) {
-      fused_sigmoid_gating_delta_rule_update_kernel_impl<scalar_t, float>(
-          q.data_ptr<scalar_t>(),
-          k.data_ptr<scalar_t>(),
-          v.data_ptr<scalar_t>(),
-          A_log.data_ptr<float>(),
-          a.data_ptr<scalar_t>(),
-          dt_bias.data_ptr<scalar_t>(),
-          b.data_ptr<scalar_t>(),
-          initial_state_indices.data_ptr<int32_t>(),
-          initial_state_source.data_ptr<float>(),
-          core_attn_out.data_ptr<scalar_t>(),
-          qk_scale_buf.data_ptr<float>(),
-          seq_len,
-          batch_size,
-          num_heads,
-          head_dim,
-          v_num_heads,
-          v_head_dim,
-          q_strideB,
-          q_strideS,
-          q_strideH,
-          k_strideB,
-          k_strideS,
-          k_strideH,
-          v_strideB,
-          v_strideS,
-          v_strideH,
-          use_qk_l2norm_in_kernel,
-          softplus_threshold);
-    } else if (A_log.scalar_type() == q.scalar_type()) {
-      fused_sigmoid_gating_delta_rule_update_kernel_impl<scalar_t, scalar_t>(
-          q.data_ptr<scalar_t>(),
-          k.data_ptr<scalar_t>(),
-          v.data_ptr<scalar_t>(),
-          A_log.data_ptr<scalar_t>(),
-          a.data_ptr<scalar_t>(),
-          dt_bias.data_ptr<scalar_t>(),
-          b.data_ptr<scalar_t>(),
-          initial_state_indices.data_ptr<int32_t>(),
-          initial_state_source.data_ptr<float>(),
-          core_attn_out.data_ptr<scalar_t>(),
-          qk_scale_buf.data_ptr<float>(),
-          seq_len,
-          batch_size,
-          num_heads,
-          head_dim,
-          v_num_heads,
-          v_head_dim,
-          q_strideB,
-          q_strideS,
-          q_strideH,
-          k_strideB,
-          k_strideS,
-          k_strideH,
-          v_strideB,
-          v_strideS,
-          v_strideH,
-          use_qk_l2norm_in_kernel,
-          softplus_threshold);
-    } else {
-      TORCH_CHECK(false, "Unsupported A_log dtype");
-    }
-  });
+
+  CPU_DISPATCH_REDUCED_FLOATING_TYPES_EXT(
+      q.scalar_type(), A_log.scalar_type(), "fused_sigmoid_gating_delta_rule_update_kernel_impl", [&] {
+        fused_sigmoid_gating_delta_rule_update_kernel_impl<scalar_t, param_t>(
+            q.data_ptr<scalar_t>(),
+            k.data_ptr<scalar_t>(),
+            v.data_ptr<scalar_t>(),
+            A_log.data_ptr<param_t>(),
+            a.data_ptr<scalar_t>(),
+            dt_bias.data_ptr<scalar_t>(),
+            b.data_ptr<scalar_t>(),
+            initial_state_indices.data_ptr<int32_t>(),
+            initial_state_source.data_ptr<float>(),
+            core_attn_out.data_ptr<scalar_t>(),
+            qk_scale_buf.data_ptr<float>(),
+            seq_len,
+            batch_size,
+            num_heads,
+            head_dim,
+            v_num_heads,
+            v_head_dim,
+            q_strideB,
+            q_strideS,
+            q_strideH,
+            k_strideB,
+            k_strideS,
+            k_strideH,
+            v_strideB,
+            v_strideS,
+            v_strideH,
+            use_qk_l2norm_in_kernel,
+            softplus_threshold);
+      });
   return core_attn_out;
 }
 
@@ -1414,30 +1382,16 @@ fused_gdn_gating_cpu(const at::Tensor& A_log, const at::Tensor& a, const at::Ten
   CHECK_EQ(b.size(1), num_heads);
   at::Tensor out = at::empty({1, batch, num_heads}, a.options().dtype(at::kFloat));
   at::Tensor beta = at::empty({1, batch, num_heads}, b.options());
-  AT_DISPATCH_REDUCED_FLOATING_TYPES(a.scalar_type(), "fused_gdn_gating_kernel", [&] {
-    if (A_log.scalar_type() == at::kFloat) {
-      fused_gdn_gating_kernel_impl<scalar_t>(
-          A_log.data_ptr<float>(),
-          a.data_ptr<scalar_t>(),
-          b.data_ptr<scalar_t>(),
-          dt_bias.data_ptr<scalar_t>(),
-          out.data_ptr<float>(),
-          beta.data_ptr<scalar_t>(),
-          batch,
-          num_heads);
-    } else if (A_log.scalar_type() == a.scalar_type()) {
-      fused_gdn_gating_kernel_impl<scalar_t>(
-          A_log.data_ptr<scalar_t>(),
-          a.data_ptr<scalar_t>(),
-          b.data_ptr<scalar_t>(),
-          dt_bias.data_ptr<scalar_t>(),
-          out.data_ptr<float>(),
-          beta.data_ptr<scalar_t>(),
-          batch,
-          num_heads);
-    } else {
-      TORCH_CHECK(false, "Unsupported A_log dtype");
-    }
+  CPU_DISPATCH_REDUCED_FLOATING_TYPES_EXT(a.scalar_type(), A_log.scalar_type(), "fused_gdn_gating_kernel", [&] {
+    fused_gdn_gating_kernel_impl<scalar_t>(
+        A_log.data_ptr<param_t>(),
+        a.data_ptr<scalar_t>(),
+        b.data_ptr<scalar_t>(),
+        dt_bias.data_ptr<scalar_t>(),
+        out.data_ptr<float>(),
+        beta.data_ptr<scalar_t>(),
+        batch,
+        num_heads);
   });
   return std::make_tuple(out, beta);
 }
