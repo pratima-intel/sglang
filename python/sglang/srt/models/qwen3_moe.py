@@ -802,10 +802,7 @@ class Qwen3MoeDecoderLayer(nn.Module):
         )
 
         hidden_states = self.mlp(
-            hidden_states,
-            forward_batch=forward_batch,
-            should_allreduce_fusion=should_allreduce_fusion,
-            use_reduce_scatter=use_reduce_scatter,
+            hidden_states, forward_batch, should_allreduce_fusion, use_reduce_scatter
         )
 
         if should_allreduce_fusion:
@@ -848,9 +845,7 @@ class Qwen3MoeDecoderLayer(nn.Module):
 
     def op_mlp(self, state):
         hidden_states = state.pop("hidden_states_mlp_input")
-        state.hidden_states_mlp_output = self.mlp(
-            hidden_states, forward_batch=state.forward_batch
-        )
+        state.hidden_states_mlp_output = self.mlp(hidden_states, state.forward_batch)
 
     def op_comm_postprocess_layer(self, state):
         hidden_states, residual = self.layer_communicator.postprocess_layer(

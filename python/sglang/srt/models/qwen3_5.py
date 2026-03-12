@@ -74,9 +74,9 @@ from sglang.srt.models.qwen3_vl import Qwen3VLForConditionalGeneration
 
 # Utils
 from sglang.srt.utils import (
+    LazyValue,
     add_prefix,
     cpu_has_amx_support,
-    LazyValue,
     is_cpu,
     is_cuda,
     is_npu,
@@ -656,6 +656,7 @@ class Qwen3_5AttentionDecoderLayer(nn.Module):
         use_reduce_scatter = self.layer_communicator.should_use_reduce_scatter(
             forward_batch
         )
+
         should_allreduce_fusion = (
             self.layer_communicator.should_fuse_mlp_allreduce_with_next_layer(
                 forward_batch
