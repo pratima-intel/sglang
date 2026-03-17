@@ -1331,7 +1331,7 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3VLForConditionalGeneration):
                         # Skip loading extra parameters for GPTQ models.
                         if (
                             name_mapped.endswith(ignore_suffixes)
-                            and name_mapped not in params_dict
+                            or name_mapped not in params_dict
                         ):
                             continue
                         param = params_dict[name_mapped]
