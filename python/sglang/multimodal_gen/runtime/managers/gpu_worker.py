@@ -215,6 +215,7 @@ class GPUWorker:
         req = batch[0]
         output_batch = None
         try:
+            # Pure cpu platform does not need memry stats, below is similar
             if self.rank == 0 and not current_platform.is_cpu():
                 torch.get_device_module().reset_peak_memory_stats()
 

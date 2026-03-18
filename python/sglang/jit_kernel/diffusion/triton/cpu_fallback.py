@@ -11,9 +11,6 @@ from typing import Optional
 import torch
 from torch import Tensor
 
-from sglang.srt.environ import envs
-
-
 
 def fuse_scale_shift_kernel_native(
     x: torch.Tensor,
@@ -166,4 +163,3 @@ def rms_norm_fn_native(
     if residual is not None and residual_out_val is not None:
         return y, residual_out_val.reshape(x_shape_og)
     return y
-
