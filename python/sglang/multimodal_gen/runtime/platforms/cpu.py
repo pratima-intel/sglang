@@ -103,3 +103,8 @@ class CpuPlatform(Platform):
         return (
             "sglang.multimodal_gen.runtime.layers.attention.backends.sdpa.SDPABackend"
         )
+
+    @classmethod
+    def enable_dit_layerwise_offload_for_wan_by_default(cls) -> bool:
+        """Whether to enable DIT layerwise offload by default on the current platform."""
+        return False

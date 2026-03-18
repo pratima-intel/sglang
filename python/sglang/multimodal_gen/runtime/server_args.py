@@ -302,6 +302,10 @@ class ServerArgs:
             )
 
     def _adjust_offload(self):
+        if current_platform.is_cpu():
+            # CPU platform does not need offload
+            return
+
         # TODO: to be handled by each platform
         if current_platform.get_device_total_memory() / BYTES_PER_GB < 30:
             logger.info("Enabling all offloading for GPU with low device memory")
