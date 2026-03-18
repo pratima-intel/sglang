@@ -15,6 +15,8 @@ from sglang.multimodal_gen.runtime.platforms import current_platform
 _is_cuda = current_platform.is_cuda()
 _is_npu = current_platform.is_npu()
 _is_musa = current_platform.is_musa()
+_is_cpu = current_platform.is_cpu()
+
 if _is_cuda:
     from sgl_kernel import fused_add_rmsnorm, rmsnorm
 
@@ -23,8 +25,8 @@ if _is_npu:
 
 if _is_musa:
     from sgl_kernel import fused_add_rmsnorm
-
-from sglang.jit_kernel.diffusion.triton.norm import norm_infer, rms_norm_fn
+if not _is_cpu:
+    from sglang.jit_kernel.diffusion.triton.norm import norm_infer, rms_norm_fn
 from sglang.jit_kernel.diffusion.triton.rmsnorm_onepass import triton_one_pass_rms_norm
 from sglang.jit_kernel.diffusion.triton.scale_shift import fuse_scale_shift_kernel
 from sglang.jit_kernel.norm import can_use_fused_inplace_qknorm, fused_inplace_qknorm
