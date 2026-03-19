@@ -396,6 +396,10 @@ class ServerArgs:
         if self.tp_size is None:
             self.tp_size = 1
 
+        if current_platform.is_cpu() and self.tp_size > 1:
+            # CPU platform reuse num_gpus to represent num cpu numa nodes as devices
+            self.num_gpus = self.tp_size
+
         if self.hsdp_shard_dim is None:
             self.hsdp_shard_dim = self.num_gpus
 
