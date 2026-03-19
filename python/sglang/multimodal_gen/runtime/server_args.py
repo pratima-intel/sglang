@@ -248,7 +248,8 @@ class ServerArgs:
         """check consistency and raise errors for invalid configs"""
         self._validate_pipeline()
         self._validate_offload()
-        self._validate_parallelism()
+        if not current_platform.is_cpu():
+            self._validate_parallelism()
         self._validate_cfg_parallel()
 
     def _adjust_save_paths(self):

@@ -190,7 +190,6 @@ class GroupCoordinator:
         self.device = get_local_torch_device()
 
         self.use_device_communicator = use_device_communicator
-
         self.device_communicator: DeviceCommunicatorBase = None  # type: ignore
         if use_device_communicator and self.world_size > 1:
             # Platform-aware device communicator selection
