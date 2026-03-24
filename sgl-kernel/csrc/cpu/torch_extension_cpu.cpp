@@ -361,7 +361,6 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor> fused_qkvzba_split_re
     int64_t head_qk,
     int64_t head_v);
 
-
 // fused_qkvzba_split_reshape_cat_cpu_contiguous
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor> fused_qkvzba_split_reshape_cat_contiguous_cpu(
     const at::Tensor& mixed_qkvz,
@@ -607,7 +606,8 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
   m.impl("fused_qkvzba_split_reshape_cat_cpu", torch::kCPU, &fused_qkvzba_split_reshape_cat_cpu);
   // fused_qkvzba_split_reshape_cat_contiguous_cpu
   m.def(
-      "fused_qkvzba_split_reshape_cat_contiguous_cpu(Tensor mixed_qkvz, Tensor mixed_ba, int num_heads_qk, int num_heads_v, int "
+      "fused_qkvzba_split_reshape_cat_contiguous_cpu(Tensor mixed_qkvz, Tensor mixed_ba, int num_heads_qk, int "
+      "num_heads_v, int "
       "head_qk, int head_v) -> (Tensor, Tensor, Tensor, Tensor)");
   m.impl("fused_qkvzba_split_reshape_cat_contiguous_cpu", torch::kCPU, &fused_qkvzba_split_reshape_cat_contiguous_cpu);
 

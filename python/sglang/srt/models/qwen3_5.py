@@ -456,7 +456,7 @@ class Qwen3_5GatedDeltaNet(nn.Module):
             )
         elif _is_cpu and _is_amx_available:
             mixed_qkv, z, b, a = (
-                torch.ops.sgl_kernel.fused_qkvzba_split_reshape_cat_cpu(
+                torch.ops.sgl_kernel.fused_qkvzba_split_reshape_cat_contiguous_cpu(
                     projected_states_qkvz,
                     projected_states_ba,
                     self.num_k_heads // self.attn_tp_size,
@@ -469,10 +469,12 @@ class Qwen3_5GatedDeltaNet(nn.Module):
             query, key, value, z, b, a = self.fix_query_key_value_ordering(
                 projected_states_qkvz, projected_states_ba
             )
+
             query, key, value = map(
                 lambda x: x.reshape(x.shape[0], -1), (query, key, value)
             )
             mixed_qkv = torch.cat((query, key, value), dim=-1)
+
         core_attn_out = self.attn(
             forward_batch,
             mixed_qkv=mixed_qkv,

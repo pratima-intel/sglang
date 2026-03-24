@@ -76,11 +76,10 @@ def fix_query_key_value_ordering_reshape_cat_contiguous(
     # value / z reshape to (seq, num_v_heads/tp, head_v_dim)
     value = value.reshape(value.size(0), -1, head_v_dim)
     z = z.reshape(z.size(0), -1, head_v_dim)
-    query, key, value = map(
-        lambda x: x.reshape(x.shape[0], -1), (query, key, value)
-    )
+    query, key, value = map(lambda x: x.reshape(x.shape[0], -1), (query, key, value))
     mixed_qkv = torch.cat((query, key, value), dim=-1)
     return mixed_qkv, z, b, a
+
 
 class TestQwen3(CustomTestCase):
     def test_fused_qkvzba_split_reshape_cat(self):
@@ -111,7 +110,6 @@ class TestQwen3(CustomTestCase):
         torch.testing.assert_close(b, b_ref, atol=atol, rtol=rtol)
         torch.testing.assert_close(a, a_ref, atol=atol, rtol=rtol)
 
-
     def test_fused_qkvzba_split_reshape_cat_contiguous(self):
         mixed_qkvz = torch.rand(1, 12288, dtype=torch.bfloat16)
         mixed_ba = torch.rand(1, 64, dtype=torch.bfloat16)
@@ -122,19 +120,23 @@ class TestQwen3(CustomTestCase):
         attn_tp_size = 1
         key_dim = head_k_dim * num_k_heads
         value_dim = head_v_dim * num_v_heads
-        mixed_qkv_ref, z_ref, b_ref, a_ref = fix_query_key_value_ordering_reshape_cat_contiguous(
-            mixed_qkvz,
-            mixed_ba,
-            key_dim,
-            value_dim,
-            num_v_heads,
-            head_v_dim,
-            attn_tp_size,
+        mixed_qkv_ref, z_ref, b_ref, a_ref = (
+            fix_query_key_value_ordering_reshape_cat_contiguous(
+                mixed_qkvz,
+                mixed_ba,
+                key_dim,
+                value_dim,
+                num_v_heads,
+                head_v_dim,
+                attn_tp_size,
+            )
         )
         num_heads_qk = num_k_heads // attn_tp_size
         num_heads_v = num_v_heads // attn_tp_size
-        mixed_qkv, z, b, a = torch.ops.sgl_kernel.fused_qkvzba_split_reshape_cat_contiguous_cpu(
-            mixed_qkvz, mixed_ba, num_heads_qk, num_heads_v, head_k_dim, head_v_dim
+        mixed_qkv, z, b, a = (
+            torch.ops.sgl_kernel.fused_qkvzba_split_reshape_cat_contiguous_cpu(
+                mixed_qkvz, mixed_ba, num_heads_qk, num_heads_v, head_k_dim, head_v_dim
+            )
         )
         atol = rtol = precision[mixed_qkv.dtype]
         torch.testing.assert_close(mixed_qkv, mixed_qkv_ref, atol=atol, rtol=rtol)

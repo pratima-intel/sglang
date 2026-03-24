@@ -62,7 +62,6 @@ void fused_qkvzba_split_reshape_cat_impl(
   });
 }
 
-
 template <typename scalar_t>
 void fused_qkvzba_split_reshape_cat_contiguous_impl(
     const scalar_t* __restrict__ mixed_qkvz,
@@ -96,7 +95,6 @@ void fused_qkvzba_split_reshape_cat_contiguous_impl(
     }
   });
 }
-
 
 }  // anonymous namespace
 
@@ -151,7 +149,6 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor> fused_qkvzba_split_re
   return std::make_tuple(mixed_qkv, z, b, a);
 }
 
-
 // mixed_qkvz: [batch, num_heads_qk * head_qk * 2 + num_heads_v * head_v * 2]
 // mixed_ba: [batch, num_heads_v * 2]
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor> fused_qkvzba_split_reshape_cat_contiguous_cpu(
@@ -161,7 +158,8 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor> fused_qkvzba_split_re
     int64_t num_heads_v,
     int64_t head_qk,
     int64_t head_v) {
-  RECORD_FUNCTION("sgl-kernel::fused_qkvzba_split_reshape_cat_contiguous_cpu", std::vector<c10::IValue>({mixed_qkvz, mixed_ba}));
+  RECORD_FUNCTION(
+      "sgl-kernel::fused_qkvzba_split_reshape_cat_contiguous_cpu", std::vector<c10::IValue>({mixed_qkvz, mixed_ba}));
   CHECK_DIM(2, mixed_qkvz);
   CHECK_DIM(2, mixed_ba);
   CHECK_INPUT(mixed_qkvz);
