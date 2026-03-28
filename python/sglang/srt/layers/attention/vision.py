@@ -357,8 +357,8 @@ class VisionTritonAttention(nn.Module):
                 k,
                 v,
                 output,
-                cu_seqlens.cuda(),
-                seq_lens.cuda(),
+                cu_seqlens.xpu(),#,.cuda(),
+                seq_lens.xpu(),#,.cuda(),
                 max_seqlen,
                 is_causal=False,
             )
