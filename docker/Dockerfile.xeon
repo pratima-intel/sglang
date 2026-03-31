@@ -33,13 +33,12 @@ RUN pip config set global.extra-index-url https://pypi.org/simple && \
     "setuptools-scm>=8" \
     intel-openmp==2024.2.0
 
-RUN git clone https://github.com/pratima-intel/sglang.git && \
+RUN git clone https://github.com/jianan-gu/sglang.git && \
     cd sglang && \
+    cp ../torchao_utils.py ./python/sglang/srt/layers/ && \
     git checkout ${VER_SGLANG} && \
     pip install -e "python[all_cpu]" && \
-    pip install https://download.pytorch.org/whl/nightly/cpu/torch-2.9.0.dev20250701%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl && \
-    pip install https://download.pytorch.org/whl/nightly/cpu/torchvision-0.23.0.dev20250701%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl && \
-    pip install triton==3.1.0 --force-reinstall && \
+    pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/cpu && \
     cd sgl-kernel && \
     python setup.py install
 
