@@ -35,7 +35,6 @@ RUN pip config set global.extra-index-url https://pypi.org/simple && \
 
 RUN git clone https://github.com/pratima-intel/sglang.git && \
     cd sglang && \
-    cp ../torchao_utils.py ./python/sglang/srt/layers/ && \
     git checkout ${VER_SGLANG} && \
     pip install -e "python[all_cpu]" && \
     pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/cpu && \
@@ -45,3 +44,23 @@ RUN git clone https://github.com/pratima-intel/sglang.git && \
 ENV LD_PRELOAD=/root/miniforge3/lib/libiomp5.so:/root/miniforge3/lib/libtcmalloc.so:/root/miniforge3/lib/libtbbmalloc.so.2
 
 WORKDIR /root/sglang
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
