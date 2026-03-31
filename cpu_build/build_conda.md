@@ -8,7 +8,7 @@ conda create -n sglang python=3.10
 conda activate sglang
 
 # Install SGLang
-git clone https://github.com/jianan-gu/sglang.git
+git clone https://github.com/pratima-intel/sglang.git
 
 cd sglang
 
